@@ -1,0 +1,18 @@
+# Copyright (C) CDN77.com
+
+QUICHE_COMMON_FLAGS="--package quiche --verbose --features ffi,control-events"
+QUICHE_BUILD_FLAGS="$QUICHE_COMMON_FLAGS --release"
+QUICHE_BUILD_TARGET="release"
+
+if [ $NGX_DEBUG = YES ]; then
+    QUICHE_BUILD_FLAGS="$QUICHE_COMMON_FLAGS"
+    QUICHE_BUILD_TARGET="debug"
+fi
+
+cat << END >> $NGX_MAKEFILE
+
+$QUICHE/target/$QUICHE_BUILD_TARGET/libquiche.a: \
+ $NGX_MAKEFILE
+	cd $QUICHE && BORING_BSSL_PATH="/usr/local/boringssl" BORING_BSSL_INCLUDE_PATH="/usr/local/boringssl/include" cargo build $QUICHE_BUILD_FLAGS $QUICHE_OPT
+
+END

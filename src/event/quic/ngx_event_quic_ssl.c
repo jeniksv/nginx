@@ -994,3 +994,20 @@ ngx_quic_init_connection(ngx_connection_t *c)
 
     return NGX_OK;
 }
+
+
+#if (NGX_QUICHE)
+
+ngx_int_t
+ngx_quiche_init_connection(ngx_connection_t *c, ngx_quic_connection_t *qc)
+{
+    if (ngx_ssl_create_connection(qc->conf->ssl, c, 0) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    c->ssl->no_wait_shutdown = 1;
+
+    return NGX_OK;
+}
+
+#endif

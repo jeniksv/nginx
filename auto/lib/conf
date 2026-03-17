@@ -52,3 +52,7 @@ fi
 if [ $NGX_LIBATOMIC != NO ]; then
     . auto/lib/libatomic/conf
 fi
+
+if [ $USE_QUICHE = YES ]; then
+    . auto/lib/quiche/conf
+fi
