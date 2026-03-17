@@ -34,6 +34,15 @@ typedef struct ngx_quic_socket_s      ngx_quic_socket_t;
 typedef struct ngx_quic_path_s        ngx_quic_path_t;
 typedef struct ngx_quic_keys_s        ngx_quic_keys_t;
 
+typedef void (*ngx_quic_init_stream_pt)(ngx_quic_stream_t *qs);
+typedef ngx_uint_t (*ngx_quic_max_server_ids_pt)(ngx_connection_t *c);
+typedef ngx_int_t (*ngx_quic_send_server_id_pt)(ngx_connection_t *c,
+    ngx_quic_socket_t *qsock);
+typedef ngx_uint_t (*ngx_quic_server_streams_left_pt)(
+    ngx_quic_connection_t *qc, ngx_uint_t bidi);
+typedef void (*ngx_quic_close_connection_pt)(ngx_connection_t *c,
+    ngx_int_t rc);
+
 #if (NGX_QUIC_OPENSSL_COMPAT)
 #include <ngx_event_quic_openssl_compat.h>
 #endif
@@ -145,6 +154,9 @@ typedef struct {
     ngx_rbtree_t                      tree;
     ngx_rbtree_node_t                 sentinel;
 
+    ngx_quic_init_stream_pt           stream_init;
+    ngx_quic_server_streams_left_pt   server_streams_left;
+
     ngx_queue_t                       uninitialized;
     ngx_queue_t                       free;
 
@@ -220,6 +232,14 @@ struct ngx_quic_send_ctx_s {
 
 
 struct ngx_quic_connection_s {
+    ngx_quic_close_connection_pt      explicit_close;
+    ngx_quic_max_server_ids_pt        max_server_ids;
+    ngx_quic_send_server_id_pt        send_server_id;
+
+#if (NGX_QUICHE)
+    quiche_conn                      *connection;
+#endif
+
     uint32_t                          version;
 
     ngx_quic_path_t                  *path;
@@ -316,6 +336,10 @@ void ngx_quic_close_connection(ngx_connection_t *c, ngx_int_t rc);
 void ngx_quic_shutdown_quic(ngx_connection_t *c);
 void ngx_quic_address_hash(struct sockaddr *sockaddr, socklen_t socklen,
     ngx_uint_t no_port, u_char *salt, size_t saltlen, u_char buf[20]);
+
+#if (NGX_QUICHE)
+void ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc);
+#endif
 
 #if (NGX_DEBUG)
 void ngx_quic_connstate_dbg(ngx_connection_t *c);

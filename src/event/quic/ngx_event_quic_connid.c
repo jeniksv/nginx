@@ -19,8 +19,6 @@ static ngx_int_t ngx_quic_retire_client_id(ngx_connection_t *c,
     ngx_quic_client_id_t *cid);
 static ngx_quic_client_id_t *ngx_quic_alloc_client_id(ngx_connection_t *c,
     ngx_quic_connection_t *qc);
-static ngx_int_t ngx_quic_send_server_id(ngx_connection_t *c,
-    ngx_quic_server_id_t *sid);
 
 
 ngx_int_t
@@ -410,7 +408,7 @@ ngx_quic_create_sockets(ngx_connection_t *c)
 
     qc = ngx_quic_get_connection(c);
 
-    n = ngx_min(NGX_QUIC_MAX_SERVER_IDS, qc->ctp.active_connection_id_limit);
+    n = qc->max_server_ids(c);
 
     ngx_log_debug2(NGX_LOG_DEBUG_EVENT, c->log, 0,
                    "quic create sockets has:%ui max:%ui", qc->nsockets, n);
@@ -426,7 +424,7 @@ ngx_quic_create_sockets(ngx_connection_t *c)
             return NGX_ERROR;
         }
 
-        if (ngx_quic_send_server_id(c, &qsock->sid) != NGX_OK) {
+        if (qc->send_server_id(c, qsock) != NGX_OK) {
             return NGX_ERROR;
         }
     }
@@ -435,14 +433,17 @@ ngx_quic_create_sockets(ngx_connection_t *c)
 }
 
 
-static ngx_int_t
-ngx_quic_send_server_id(ngx_connection_t *c, ngx_quic_server_id_t *sid)
+ngx_int_t
+ngx_quic_send_server_id(ngx_connection_t *c, ngx_quic_socket_t *qsock)
 {
     ngx_str_t               dcid;
     ngx_quic_frame_t       *frame;
+    ngx_quic_server_id_t   *sid;
     ngx_quic_connection_t  *qc;
 
     qc = ngx_quic_get_connection(c);
+
+    sid = &qsock->sid;
 
     dcid.len = sid->len;
     dcid.data = sid->id;
@@ -469,6 +470,17 @@ ngx_quic_send_server_id(ngx_connection_t *c, ngx_quic_server_id_t *sid)
     ngx_quic_queue_frame(qc, frame);
 
     return NGX_OK;
+}
+
+
+ngx_uint_t
+ngx_quic_max_server_ids(ngx_connection_t *c)
+{
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    return ngx_min(NGX_QUIC_MAX_SERVER_IDS, qc->ctp.active_connection_id_limit);
 }
 
 
@@ -500,3 +512,87 @@ ngx_quic_free_client_id(ngx_connection_t *c, ngx_quic_client_id_t *cid)
 
     return NGX_OK;
 }
+
+
+#if (NGX_QUICHE)
+
+ngx_int_t
+ngx_quiche_handle_retired_scids(ngx_connection_t *c)
+{
+    size_t                      len;
+    const uint8_t              *id;
+    ngx_quic_socket_t          *qsock;
+    ngx_quic_connection_t      *qc;
+    quiche_connection_id_iter  *iter;
+
+    qc = ngx_quic_get_connection(c);
+
+    if (quiche_conn_retired_scids(qc->connection) == 0) {
+        return NGX_OK;
+    }
+
+    iter = quiche_conn_retired_scid_iter(qc->connection);
+
+    while (quiche_connection_id_iter_next(iter, &id, &len)) {
+
+        qsock = ngx_quic_find_socket_by_id(c, id, len);
+        if (qsock == NULL) {
+            continue;
+        }
+
+        ngx_log_debug1(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quic socket seq:%uL is retired", qsock->sid.seqnum);
+
+        ngx_quic_close_socket(c, qsock);
+    }
+
+    quiche_connection_id_iter_free(iter);
+
+    /* restore socket count up to a limit after deletion */
+    return ngx_quic_create_sockets(c);
+}
+
+
+ngx_uint_t
+ngx_quiche_max_server_ids(ngx_connection_t *c)
+{
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    return ngx_min(NGX_QUIC_MAX_SERVER_IDS,
+                   qc->nsockets + quiche_conn_scids_left(qc->connection));
+}
+
+
+ngx_int_t
+ngx_quiche_send_server_id(ngx_connection_t *c, ngx_quic_socket_t *qsock)
+{
+    u_char                  token[NGX_QUIC_SR_TOKEN_LEN];
+    ngx_str_t               cid;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    ngx_memcpy(&qsock->sockaddr, c->sockaddr, c->socklen);
+    qsock->socklen = c->socklen;
+
+    cid.data = qsock->sid.id;
+    cid.len = qsock->sid.len;
+
+    if (ngx_quic_new_sr_token(c, &cid, qc->conf->sr_token_key, token)
+        != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    if (quiche_conn_new_scid(qc->connection, cid.data, cid.len, token, 1,
+                             &qsock->sid.seqnum) < 0)
+    {
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+#endif

@@ -258,6 +258,10 @@ if [ $HTTP = YES ]; then
         . auto/module
     fi
 
+    if [ $HTTP_V3 = YES -a $QUICHE != NONE ]; then
+        USE_QUICHE=YES
+    fi
+
     if [ $HTTP_GZIP = YES ]; then
         have=NGX_HTTP_GZIP . auto/have
         USE_ZLIB=YES

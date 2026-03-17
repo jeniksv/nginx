@@ -66,6 +66,11 @@ static void ngx_quic_set_packet_number(ngx_quic_header_t *pkt,
     ngx_quic_send_ctx_t *ctx);
 static ngx_int_t ngx_quic_stateless_reset_filter(ngx_connection_t *c);
 
+#if (NGX_QUICHE)
+static ssize_t ngx_quiche_send_dgram(ngx_connection_t *pc, u_char *buf,
+    size_t len, struct sockaddr *sockaddr, socklen_t socklen, size_t segment);
+#endif /* NGX_QUICHE */
+
 
 ngx_int_t
 ngx_quic_output(ngx_connection_t *c)
@@ -1404,3 +1409,113 @@ ngx_quic_path_limit(ngx_connection_t *c, ngx_quic_path_t *path, size_t size)
 
     return size;
 }
+
+
+#if (NGX_QUICHE)
+
+ngx_int_t
+ngx_quiche_connection_send_new_token(ngx_connection_t *c)
+{
+    time_t                  expires;
+    uint8_t                 token_buf[NGX_QUIC_TOKEN_BUF_SIZE];
+    ngx_str_t               token;
+    ngx_quic_connection_t  *qc;
+
+    expires = ngx_time() + NGX_QUIC_NEW_TOKEN_LIFETIME;
+    token.data = token_buf;
+    token.len = NGX_QUIC_TOKEN_BUF_SIZE;
+    qc = ngx_quic_get_connection(c);
+
+    if (ngx_quic_new_token(c->log, c->sockaddr, c->socklen,
+                           qc->conf->av_token_key, &token, NULL, expires, 0)
+        != NGX_OK)
+    {
+        qc->error_reason = "failed to generate new token";
+        return NGX_ERROR;
+    }
+
+    if (quiche_conn_send_new_token(qc->connection, token.data, token.len) < 0) {
+        qc->error_reason = "quiche_conn_send_token failed";
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static ssize_t
+ngx_quiche_send_dgram(ngx_connection_t *pc, u_char *buf, size_t len,
+    struct sockaddr *sockaddr, socklen_t socklen, size_t segment)
+{
+    ssize_t     n;
+    ngx_uint_t  log_error;
+
+    log_error = pc->log_error;
+    pc->log_error = NGX_ERROR_IGNORE_EMSGSIZE;
+
+    n = ngx_quic_send(pc, buf, len, sockaddr, socklen);
+
+    pc->log_error = log_error;
+
+    if (n == NGX_ERROR && pc->write->error) {
+
+        /*
+         * Datagram rejected by the kernel is dropped. Quiche handles it as
+         * packet loss and reports rejected PMTUD probes via failed_probe()
+         */
+
+        pc->write->error = 0;
+
+        return len;
+    }
+
+    return n;
+}
+
+
+ngx_int_t
+ngx_quiche_output(ngx_connection_t *pc)
+{
+    ssize_t                 written, sent;
+    static u_char           out[NGX_QUIC_MAX_UDP_PAYLOAD_SIZE];
+    quiche_send_info        send_info;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(pc);
+
+    while (1) {
+        written = quiche_conn_send(qc->connection, out, sizeof(out),
+                                   &send_info);
+        if (written == QUICHE_ERR_DONE) {
+            break;
+        }
+
+        if (written < 0) {
+            ngx_log_error(NGX_LOG_INFO, pc->log, 0,
+                          "quiche send failed with: %d", written);
+
+            return NGX_ERROR;
+        }
+
+        sent = ngx_quiche_send_dgram(pc, out, written,
+                                     (struct sockaddr *) &send_info.to,
+                                     send_info.to_len, 0);
+        if (sent == NGX_AGAIN) {
+            pc->write->ready = 0;
+
+            if (ngx_handle_write_event(pc->write, 0) != NGX_OK) {
+                return NGX_ERROR;
+            }
+
+            return NGX_AGAIN;
+        }
+
+        if (sent != written) {
+            return NGX_ERROR;
+        }
+    }
+
+    return NGX_OK;
+}
+
+#endif

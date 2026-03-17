@@ -74,7 +74,7 @@ struct ngx_listening_s {
     unsigned            reuseport:1;
     unsigned            add_reuseport:1;
     unsigned            keepalive:2;
-    unsigned            quic:1;
+    unsigned            quic:2;
 
     unsigned            change_protocol:1;
 
@@ -216,6 +216,14 @@ struct ngx_connection_s {
         c->log->log_level = l->log_level;                                    \
     }
 
+#define NGX_QUIC_DISABLED         0x00
+#define NGX_QUIC_NGINX_VERSION    0x01
+#define NGX_QUIC_QUICHE_VERSION   0x02
+#if (NGX_QUICHE)
+#define NGX_QUIC_DEFAULT_VERSION  NGX_QUIC_QUICHE_VERSION
+#else
+#define NGX_QUIC_DEFAULT_VERSION  NGX_QUIC_NGINX_VERSION
+#endif
 
 ngx_listening_t *ngx_create_listening(ngx_conf_t *cf, struct sockaddr *sockaddr,
     socklen_t socklen);

@@ -19,6 +19,16 @@ ngx_int_t ngx_quic_handle_new_connection_id_frame(ngx_connection_t *c,
 
 ngx_int_t ngx_quic_create_sockets(ngx_connection_t *c);
 ngx_int_t ngx_quic_create_server_id(ngx_connection_t *c, u_char *id);
+ngx_uint_t ngx_quic_max_server_ids(ngx_connection_t *c);
+ngx_int_t ngx_quic_send_server_id(ngx_connection_t *c,
+    ngx_quic_socket_t *qsock);
+
+#if (NGX_QUICHE)
+ngx_uint_t ngx_quiche_max_server_ids(ngx_connection_t *c);
+ngx_int_t ngx_quiche_send_server_id(ngx_connection_t *c,
+    ngx_quic_socket_t *qsock);
+ngx_int_t ngx_quiche_handle_retired_scids(ngx_connection_t *c);
+#endif
 
 ngx_quic_client_id_t *ngx_quic_create_client_id(ngx_connection_t *c,
     ngx_str_t *id, uint64_t seqnum, u_char *token);

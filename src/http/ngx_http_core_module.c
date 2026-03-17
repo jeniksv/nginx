@@ -4348,9 +4348,32 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 #endif
         }
 
-        if (ngx_strcmp(value[n].data, "quic") == 0) {
+        if (ngx_strncmp(value[n].data, "quic", 4) == 0) {
 #if (NGX_HTTP_V3)
-            lsopt.quic = 1;
+            if (value[n].len == 4) {
+                lsopt.quic = NGX_QUIC_DEFAULT_VERSION;
+
+            } else if (ngx_strcmp(&value[n].data[4], "=nginx") == 0) {
+                lsopt.quic = NGX_QUIC_NGINX_VERSION;
+
+            } else if (ngx_strcmp(&value[n].data[4], "=quiche") == 0) {
+#if (NGX_QUICHE)
+                lsopt.quic = NGX_QUIC_QUICHE_VERSION;
+#else
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "the \"quic=quiche\" parameter requires "
+                                   "quiche module");
+                return NGX_CONF_ERROR;
+#endif
+
+            } else {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "the \"quic\" parameter must be "
+                                   "argumentless or set to \"nginx\" or "
+                                   "\"quiche\"");
+                return NGX_CONF_ERROR;
+            }
+
             lsopt.type = SOCK_DGRAM;
             continue;
 #else

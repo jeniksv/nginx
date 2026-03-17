@@ -1345,7 +1345,16 @@ ngx_http_add_addresses(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
         protocols_prev |= addr[i].opt.http2 << 2;
 #endif
 #if (NGX_HTTP_V3)
-        quic = lsopt->quic || addr[i].opt.quic;
+        if ((lsopt->quic && addr[i].opt.quic)
+            && (lsopt->quic != addr[i].opt.quic))
+        {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "conflicting \"quic\" parameter for %V",
+                               &addr[i].opt.addr_text);
+            return NGX_ERROR;
+        }
+
+        quic = lsopt->quic ? lsopt->quic : addr[i].opt.quic;
 #endif
 
         if (lsopt->set) {

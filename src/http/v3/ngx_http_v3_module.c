@@ -13,6 +13,9 @@
 static ngx_int_t ngx_http_v3_variable(ngx_http_request_t *r,
     ngx_http_variable_value_t *v, uintptr_t data);
 static ngx_int_t ngx_http_v3_add_variables(ngx_conf_t *cf);
+#if (NGX_QUICHE && NGX_DEBUG)
+static ngx_int_t ngx_http_v3_postconfiguration(ngx_conf_t *cf);
+#endif
 static void *ngx_http_v3_create_srv_conf(ngx_conf_t *cf);
 static char *ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent,
     void *child);
@@ -78,13 +81,61 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.active_connection_id_limit),
       NULL },
 
+#if (NGX_QUICHE)
+    { ngx_string("quic_disable_active_migration"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.disable_active_migration),
+      NULL },
+
+    { ngx_string("quic_keylog_path"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.keylog_path),
+      NULL },
+
+    { ngx_string("quic_discover_pmtu"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.discover_pmtu),
+      NULL },
+
+    { ngx_string("quic_max_recv_udp_payload_size"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.max_recv_udp_payload_size),
+      NULL },
+
+    { ngx_string("quic_max_send_udp_payload_size"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.max_send_udp_payload_size),
+      NULL },
+
+    { ngx_string("quic_send_capacity_factor"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.send_capacity_factor),
+      NULL },
+#endif
+
       ngx_null_command
 };
 
 
 static ngx_http_module_t  ngx_http_v3_module_ctx = {
     ngx_http_v3_add_variables,             /* preconfiguration */
+#if (NGX_QUICHE && NGX_DEBUG)
+    ngx_http_v3_postconfiguration,         /* postconfiguration */
+#else
     NULL,                                  /* postconfiguration */
+#endif
 
     NULL,                                  /* create main configuration */
     NULL,                                  /* init main configuration */
@@ -210,6 +261,18 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
 
+#if (NGX_QUICHE)
+    h3scf->quic.config = NGX_CONF_UNSET_PTR;
+
+    h3scf->quic.disable_active_migration = NGX_CONF_UNSET;
+    h3scf->quic.discover_pmtu = NGX_CONF_UNSET;
+
+    h3scf->quic.max_recv_udp_payload_size = NGX_CONF_UNSET_SIZE;
+    h3scf->quic.max_send_udp_payload_size = NGX_CONF_UNSET_SIZE;
+
+    h3scf->quic.send_capacity_factor = NGX_CONF_UNSET_UINT;
+#endif
+
     h3scf->quic.init = ngx_http_v3_init;
     h3scf->quic.shutdown = ngx_http_v3_shutdown;
 
@@ -223,6 +286,9 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_v3_srv_conf_t *prev = parent;
     ngx_http_v3_srv_conf_t *conf = child;
 
+#if (NGX_QUICHE)
+    ngx_pool_cleanup_t        *cln;
+#endif
     ngx_http_ssl_srv_conf_t   *sscf;
     ngx_http_core_srv_conf_t  *cscf;
 
@@ -249,6 +315,23 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_uint_value(conf->quic.active_connection_id_limit,
                               prev->quic.active_connection_id_limit,
                               2);
+
+#if (NGX_QUICHE)
+    ngx_conf_merge_str_value(conf->quic.keylog_path,
+                             prev->quic.keylog_path, "");
+    ngx_conf_merge_value(conf->quic.disable_active_migration,
+                         prev->quic.disable_active_migration, 0);
+    ngx_conf_merge_value(conf->quic.discover_pmtu,
+                         prev->quic.discover_pmtu, 1);
+    ngx_conf_merge_size_value(conf->quic.max_recv_udp_payload_size,
+                              prev->quic.max_recv_udp_payload_size,
+                              NGX_CONF_UNSET_SIZE);
+    ngx_conf_merge_size_value(conf->quic.max_send_udp_payload_size,
+                              prev->quic.max_send_udp_payload_size,
+                              1452);
+    ngx_conf_merge_uint_value(conf->quic.send_capacity_factor,
+                              prev->quic.send_capacity_factor, 1);
+#endif
 
     if (conf->quic.host_key.len == 0) {
 
@@ -288,8 +371,37 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     sscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_ssl_module);
     conf->quic.ssl = &sscf->ssl;
 
+#if (NGX_QUICHE)
+    if (ngx_quiche_config_new(&conf->quic) != NGX_OK) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "failed to create quiche config");
+        return NGX_CONF_ERROR;
+    }
+
+    cln = ngx_pool_cleanup_add(cf->pool, 0);
+    if (cln == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    cln->handler = ngx_quiche_config_cleanup_handler;
+    cln->data = conf->quic.config;
+#endif
+
     return NGX_CONF_OK;
 }
+
+
+#if (NGX_QUICHE && NGX_DEBUG)
+
+static ngx_int_t
+ngx_http_v3_postconfiguration(ngx_conf_t *cf)
+{
+    quiche_enable_debug_logging(ngx_quiche_log, NULL);
+
+    return NGX_OK;
+}
+
+#endif
 
 
 static char *
