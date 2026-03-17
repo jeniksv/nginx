@@ -41,6 +41,19 @@ static ngx_int_t ngx_quic_update_max_stream_data(ngx_quic_stream_t *qs);
 static ngx_int_t ngx_quic_update_max_data(ngx_connection_t *c);
 static void ngx_quic_set_event(ngx_event_t *ev);
 
+#if (NGX_QUICHE)
+static ngx_int_t ngx_quiche_do_reset_stream(ngx_quic_stream_t *qs,
+    ngx_uint_t err);
+static ssize_t ngx_quiche_stream_recv(ngx_connection_t *c, u_char *buf,
+    size_t size);
+static ngx_chain_t *ngx_quiche_stream_send_chain(ngx_connection_t *c,
+    ngx_chain_t *in, off_t limit);
+static ngx_int_t ngx_quiche_shutdown_stream_send(ngx_connection_t *c);
+static ngx_int_t ngx_quiche_shutdown_stream_recv(ngx_connection_t *c);
+static ngx_int_t ngx_quiche_close_stream(ngx_quic_stream_t *qs);
+static ngx_quic_stream_t* ngx_quiche_stream_get(ngx_connection_t *c,
+    uint64_t id);
+#endif
 
 ngx_uint_t
 ngx_quic_server_streams_left(ngx_connection_t *c, ngx_uint_t bidi)
@@ -972,7 +985,7 @@ ngx_quic_stream_send(ngx_connection_t *c, u_char *buf, size_t size)
     cl.buf = &b;
     cl.next = NULL;
 
-    if (ngx_quic_stream_send_chain(c, &cl, 0) == NGX_CHAIN_ERROR) {
+    if (c->send_chain(c, &cl, 0) == NGX_CHAIN_ERROR) {
         return NGX_ERROR;
     }
 
@@ -1858,3 +1871,459 @@ ngx_quic_set_event(ngx_event_t *ev)
         ngx_post_event(ev, &ngx_posted_events);
     }
 }
+
+
+#if (NGX_QUICHE)
+
+ngx_int_t
+ngx_quiche_process_control_events(ngx_connection_t *pc)
+{
+    uint64_t                id;
+    ngx_event_t            *ev;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+    quiche_control_event    event;
+
+    qc = ngx_quic_get_connection(pc);
+
+    while (quiche_conn_control_event_next(qc->connection, &event)) {
+
+        if (event.type == QUICHE_CONTROL_EVENT_ADDRESS_REACHABLE) {
+
+            if (ngx_quiche_update_peer_addr(pc) == NGX_ERROR) {
+                return NGX_ERROR;
+            }
+
+            continue;
+        }
+
+        id = event.data.stream.stream_id;
+
+        qs = ngx_quic_find_stream(&qc->streams.tree, id);
+        if (qs == NULL) {
+            continue;
+        }
+
+        if (qs->connection == NULL) {
+            qs->close(qs);
+            continue;
+        }
+
+        if (event.type == QUICHE_CONTROL_EVENT_RESET_STREAM) {
+            ev = qs->connection->read;
+
+        } else {
+            ev = qs->connection->write;
+        }
+
+        ev->error = 1;
+
+        ngx_quic_set_event(ev);
+    }
+
+    return NGX_OK;
+}
+
+
+void
+ngx_quiche_stream_init(ngx_quic_stream_t  *qs)
+{
+    ngx_connection_t   *sc;
+
+    sc = qs->connection;
+
+    qs->close = ngx_quiche_close_stream;
+    qs->reset = ngx_quiche_do_reset_stream;
+    qs->shutdown_recv = ngx_quiche_shutdown_stream_recv;
+    qs->shutdown_send = ngx_quiche_shutdown_stream_send;
+
+    sc->recv = ngx_quiche_stream_recv;
+    sc->send = ngx_quic_stream_send;
+    sc->send_chain = ngx_quiche_stream_send_chain;
+}
+
+
+ngx_uint_t
+ngx_quiche_server_streams_left(ngx_connection_t *c, ngx_uint_t bidi)
+{
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    if (bidi) {
+        return quiche_conn_peer_streams_left_bidi(qc->connection) > 0;
+    }
+
+    return quiche_conn_peer_streams_left_uni(qc->connection) > 0;
+}
+
+
+ngx_int_t
+ngx_quiche_process_writable_streams(ngx_connection_t *c)
+{
+    int64_t                 id;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+    id = quiche_conn_stream_writable_next(qc->connection);
+
+    while (id >= 0) {
+        qs = ngx_quic_find_stream(&qc->streams.tree, id);
+
+        if (qs != NULL && qs->connection != NULL) {
+            ngx_quic_set_event(qs->connection->write);
+        }
+
+        id = quiche_conn_stream_writable_next(qc->connection);
+    }
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+ngx_quiche_process_readable_streams(ngx_connection_t *c)
+{
+    int64_t                 id;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+    id = quiche_conn_stream_readable_next(qc->connection);
+
+    while (id >= 0) {
+        qs = ngx_quiche_stream_get(c, id);
+        if (qs == NULL) {
+            return NGX_ERROR;
+        }
+
+        if (qs->connection != NULL) {
+            ngx_quic_set_event(qs->connection->read);
+        }
+
+        id = quiche_conn_stream_readable_next(qc->connection);
+    }
+
+    return NGX_OK;
+}
+
+
+static ngx_quic_stream_t*
+ngx_quiche_stream_get(ngx_connection_t *c, uint64_t id)
+{
+    uint64_t                n;
+    ngx_event_t            *rev;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    qs = ngx_quic_find_stream(&qc->streams.tree, id);
+    if (qs != NULL) {
+        return qs;
+    }
+
+    qs = ngx_quic_create_stream(c, id);
+    if (qs == NULL) {
+        return NULL;
+    }
+
+    if (!(id & NGX_QUIC_STREAM_SERVER_INITIATED)) {
+        n = (id >> 2) + 1;
+
+        if (id & NGX_QUIC_STREAM_UNIDIRECTIONAL) {
+            if (n > qc->streams.client_streams_uni) {
+                  qc->streams.client_streams_uni = n;
+            }
+        } else {
+            if (n > qc->streams.client_streams_bidi) {
+                qc->streams.client_streams_bidi = n;
+            }
+        }
+    }
+
+    ngx_queue_insert_tail(&qc->streams.uninitialized, &qs->queue);
+
+    rev = qs->connection->read;
+    rev->handler = ngx_quic_init_stream_handler;
+
+    if (qc->streams.initialized) {
+        ngx_post_event(rev, &ngx_posted_events);
+
+        if (c->write->posted) {
+            /*
+             * The posted stream can produce output immediately.
+             * By postponing the push event, we coalesce the stream
+             * output with queued frames in one UDP datagram.
+             */
+
+            ngx_delete_posted_event(c->write);
+            ngx_post_event(c->write, &ngx_posted_events);
+        }
+    }
+
+    return qs;
+}
+
+
+static ngx_int_t
+ngx_quiche_do_reset_stream(ngx_quic_stream_t *qs, ngx_uint_t err)
+{
+    ngx_int_t               rc;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(qs->parent);
+
+    if (qs->connection) {
+        qs->connection->write->error = 1;
+    }
+
+    if (quiche_conn_stream_is_collected(qc->connection, qs->id)) {
+        return NGX_OK;
+    }
+
+    rc = quiche_conn_stream_shutdown(qc->connection, qs->id,
+                                     QUICHE_SHUTDOWN_WRITE, err);
+    if (rc == QUICHE_ERR_DONE) {
+        return NGX_OK;
+    }
+
+    if (rc < 0) {
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static ssize_t
+ngx_quiche_stream_recv(ngx_connection_t *c, u_char *buf, size_t size)
+{
+    ssize_t                 recv_len;
+    bool                    fin;
+    uint64_t                rc;
+    ngx_event_t            *rev;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    rc = 0;
+    qs = c->quic;
+    qc = ngx_quic_get_connection(qs->parent);
+    rev = qs->connection->read;
+
+    if (quiche_conn_stream_is_collected(qc->connection, qs->id)) {
+        return NGX_ERROR;
+    }
+
+    if (size == 0) {
+        return 0;
+    }
+
+    recv_len = quiche_conn_stream_recv(qc->connection, qs->id, buf, size,
+                                       &fin, &rc);
+    if (recv_len == QUICHE_ERR_DONE || recv_len == 0) {
+        rev->ready = 0;
+
+        if (quiche_conn_stream_finished(qc->connection, qs->id)) {
+            rev->eof = 1;
+            return 0;
+        }
+
+        return NGX_AGAIN;
+    }
+
+    if (recv_len == QUICHE_ERR_STREAM_RESET) {
+        rev->error = 1;
+        return NGX_ERROR;
+    }
+
+    if (recv_len < 0) {
+        return NGX_ERROR;
+    }
+
+    return recv_len;
+}
+
+
+static ngx_chain_t *
+ngx_quiche_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
+{
+    ssize_t                 size, sent;
+    uint64_t                error_code;
+    ngx_uint_t              limited;
+    ngx_connection_t       *pc;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    pc = c->quic->parent;
+    qs = c->quic;
+    qc = ngx_quic_get_connection(pc);
+    limited = (limit > 0);
+
+    if (quiche_conn_stream_is_collected(qc->connection, qs->id)) {
+        c->write->error = 1;
+        return NGX_CHAIN_ERROR;
+    }
+
+    if (c->write->error) {
+        return NGX_CHAIN_ERROR;
+    }
+
+    while (in) {
+        size = ngx_buf_size(in->buf);
+
+        if (size == 0) {
+            in = in->next;
+            continue;
+        }
+
+        if (limited && (off_t) size > limit) {
+            size = (ssize_t) limit;
+        }
+
+        sent = quiche_conn_stream_send(qc->connection, qs->id, in->buf->pos,
+                                       size, 0, &error_code);
+        /* Done is returned if no data was written
+         * (because the stream has no capacity)
+         */
+        if (sent == QUICHE_ERR_DONE) {
+            c->write->ready = 0;
+
+            break;
+        }
+
+        if (sent < 0) {
+            c->write->error = 1;
+
+            return NGX_CHAIN_ERROR;
+        }
+
+        c->sent += sent;
+
+        if (limited) {
+            limit -= sent;
+        }
+
+        in->buf->pos += sent;
+
+        /* Partial write, stream has not enough capacity */
+        if (size > sent) {
+            c->write->ready = 0;
+
+            break;
+        }
+
+        /* Buffer is fully written, switch to the next. */
+        if (in->buf->pos == in->buf->last) {
+            in = in->next;
+        }
+
+        if (limited && limit == 0) {
+            break;
+        }
+    }
+
+    ngx_post_event(pc->write, &ngx_posted_events);
+
+    return in;
+}
+
+ngx_int_t
+ngx_quiche_shutdown_stream_send(ngx_connection_t *c)
+{
+    ssize_t                 sent;
+    uint64_t                error_code;
+    ngx_quic_stream_t      *qs;
+    ngx_quic_connection_t  *qc;
+
+    qs = c->quic;
+    qc = ngx_quic_get_connection(qs->parent);
+
+    if (quiche_conn_stream_is_collected(qc->connection, qs->id)) {
+        return NGX_OK;
+    }
+
+    if (!quiche_conn_stream_send_finished(qc->connection, qs->id)) {
+        sent = quiche_conn_stream_send(qc->connection, qs->id,
+                                       (const uint8_t *) "", 0, true,
+                                       &error_code);
+
+        if (sent < 0 && sent != QUICHE_ERR_DONE) {
+            return NGX_ERROR;
+        }
+
+        ngx_post_event(qs->parent->write, &ngx_posted_events);
+    }
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+ngx_quiche_shutdown_stream_recv(ngx_connection_t *c)
+{
+    ngx_int_t                 rc;
+    ngx_quic_stream_t        *qs;
+    ngx_quic_connection_t    *qc;
+
+    qs = c->quic;
+    qc = ngx_quic_get_connection(qs->parent);
+
+    if (quiche_conn_stream_is_collected(qc->connection, qs->id)) {
+        return NGX_OK;
+    }
+
+    if (!quiche_conn_stream_finished(qc->connection, qs->id)
+        && qc->conf->stream_close_code)
+    {
+        rc = quiche_conn_stream_shutdown(qc->connection, qs->id,
+                                         QUICHE_SHUTDOWN_READ,
+                                         qc->conf->stream_close_code);
+        if (rc < 0 && rc != QUICHE_ERR_DONE) {
+            return NGX_ERROR;
+        }
+    }
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_quiche_close_stream(ngx_quic_stream_t *qs)
+{
+    ngx_connection_t       *pc;
+    ngx_quic_connection_t  *qc;
+
+    pc = qs->parent;
+    qc = ngx_quic_get_connection(qs->parent);
+
+    if (!qc->closing) {
+        if (!quiche_conn_stream_finished(qc->connection, qs->id)) {
+            return NGX_OK;
+        }
+    }
+
+    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, pc->log, 0,
+                   "quiche stream id:0x%xL close", qs->id);
+
+    ngx_rbtree_delete(&qc->streams.tree, &qs->node);
+    ngx_queue_insert_tail(&qc->streams.free, &qs->queue);
+
+    if (qc->closing) {
+        ngx_post_event(&qc->close, &ngx_posted_events);
+        return NGX_OK;
+    }
+
+    if (!pc->reusable && ngx_quic_can_shutdown(pc) == NGX_OK) {
+        ngx_reusable_connection(pc, 1);
+    }
+
+    if (qc->shutdown) {
+        ngx_quic_shutdown_quic(pc);
+        return NGX_OK;
+    }
+
+    return NGX_OK;
+}
+#endif

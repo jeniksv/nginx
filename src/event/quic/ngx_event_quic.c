@@ -34,6 +34,24 @@ static ngx_int_t ngx_quic_handle_frames(ngx_connection_t *c,
 
 static void ngx_quic_push_handler(ngx_event_t *ev);
 
+#if (NGX_QUICHE)
+static ngx_int_t ngx_quiche_connection_setup(ngx_connection_t *c,
+    ngx_quic_connection_t *qc, ngx_quic_header_t *pkt);
+static ngx_int_t ngx_quiche_handle_datagram(ngx_connection_t *c,
+    ngx_buf_t *b);
+static void ngx_quiche_close_handler(ngx_event_t *ev);
+static void ngx_quiche_set_timer(ngx_connection_t *c);
+static void ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf);
+
+static ngx_int_t ngx_quiche_handle_initial_packet(ngx_connection_t *c,
+    ngx_quic_conf_t *conf);
+
+static void ngx_quiche_input_handler(ngx_event_t *rev);
+static void ngx_quiche_push_handler(ngx_event_t *wev);
+
+static void ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc);
+#endif
+
 
 static ngx_core_module_t  ngx_quic_module_ctx = {
     ngx_string("quic"),
@@ -86,6 +104,40 @@ ngx_module_t  ngx_quic_nginx_module = {
     NULL,                                  /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+
+#if (NGX_QUICHE)
+
+static const ngx_quic_backend_t  ngx_quic_backend_quiche = {
+    ngx_quiche_do_run,                     /* run */
+    ngx_quiche_stream_init,                /* stream_init */
+    ngx_quiche_connection_setup,           /* connection_setup */
+    ngx_quiche_close_connection            /* connection_close */
+};
+
+
+static ngx_quic_module_t  ngx_quic_quiche_module_ctx = {
+    ngx_string("quiche"),
+    &ngx_quic_backend_quiche
+};
+
+
+ngx_module_t  ngx_quic_quiche_module = {
+    NGX_MODULE_V1,
+    &ngx_quic_quiche_module_ctx,           /* module context */
+    NULL,                                  /* module directives */
+    NGX_QUIC_MODULE,                       /* module type */
+    NULL,                                  /* init master */
+    NULL,                                  /* init module */
+    NULL,                                  /* init process */
+    NULL,                                  /* init thread */
+    NULL,                                  /* exit thread */
+    NULL,                                  /* exit process */
+    NULL,                                  /* exit master */
+    NGX_MODULE_V1_PADDING
+};
+
+#endif
 
 
 const ngx_quic_backend_t *
@@ -1603,3 +1655,552 @@ ngx_quic_address_hash(struct sockaddr *sockaddr, socklen_t socklen,
 
     ngx_sha1_final(buf, &sha1);
 }
+
+
+#if (NGX_QUICHE)
+
+static void
+ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
+{
+    ngx_int_t               rc;
+    ngx_quic_connection_t  *qc;
+
+    rc = ngx_quiche_handle_initial_packet(c, conf);
+    if (rc != NGX_OK) {
+        ngx_quiche_close_connection(c, NGX_ERROR);
+        return;
+    }
+
+    qc = ngx_quic_get_connection(c);
+
+    if (conf->keylog_path.len > 0 && conf->keylog_path.len < NGX_MAX_PATH) {
+        char keylog_path[NGX_MAX_PATH];
+        ngx_memcpy(keylog_path, conf->keylog_path.data, conf->keylog_path.len);
+        keylog_path[conf->keylog_path.len] = '\0';
+
+        quiche_conn_set_keylog_path(qc->connection,
+                                    (const char *) keylog_path);
+    }
+
+    /*
+     * With idle_timeout 0, native nginx fires the QUIC idle timer immediately
+     * after the first output (before the client Handshake Finished arrives),
+     * so the client cannot complete the handshake.
+     */
+    if (conf->idle_timeout == 0) {
+        ngx_quiche_close_connection(c, NGX_DONE);
+        return;
+    }
+
+    rc = ngx_quiche_handle_datagram(c, c->buffer);
+    if (rc != NGX_OK) {
+        ngx_quiche_close_connection(c, NGX_ERROR);
+        return;
+    }
+
+    ngx_quiche_set_timer(c);
+}
+
+
+static ngx_int_t
+ngx_quiche_connection_setup(ngx_connection_t *c, ngx_quic_connection_t *qc,
+    ngx_quic_header_t *pkt)
+{
+    ngx_str_t           odcid;
+    ngx_quic_conf_t    *conf;
+    ngx_quic_socket_t  *qsock;
+
+    conf = qc->conf;
+
+    ngx_queue_init(&qc->free_sockets);
+
+    if (pkt->retried) {
+        qsock = ngx_pcalloc(c->pool, sizeof(ngx_quic_socket_t));
+        if (qsock == NULL) {
+            return NGX_ERROR;
+        }
+
+        qsock->sid.seqnum = NGX_QUIC_UNSET_PN;
+        qsock->sid.len = pkt->dcid.len;
+        ngx_memcpy(qsock->sid.id, pkt->dcid.data, pkt->dcid.len);
+
+        odcid = pkt->odcid;
+
+    } else {
+        qsock = ngx_quic_create_socket(c, qc);
+        if (qsock == NULL) {
+            return NGX_ERROR;
+        }
+
+        odcid.data = NULL;
+        odcid.len = 0;
+    }
+
+    ngx_memcpy(&qsock->sockaddr, c->sockaddr, c->socklen);
+    qsock->socklen = c->socklen;
+
+    qc->max_server_ids = ngx_quiche_max_server_ids;
+    qc->send_server_id = ngx_quiche_send_server_id;
+
+    qc->close.log = c->log;
+    qc->close.data = c;
+    qc->close.handler = ngx_quiche_close_handler;
+
+    qc->server_streams_left = ngx_quiche_server_streams_left;
+
+    c->read->handler = ngx_quiche_input_handler;
+    c->write->handler = ngx_quiche_push_handler;
+
+    if (ngx_quiche_init_connection(c, qc) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    qc->connection = quiche_conn_new_with_tls(qsock->sid.id, qsock->sid.len,
+                                              odcid.data, odcid.len,
+                                              c->local_sockaddr,
+                                              c->local_socklen, c->sockaddr,
+                                              c->socklen, conf->config,
+                                              c->ssl->connection, 1);
+    if (qc->connection == NULL) {
+        return NGX_ERROR;
+    }
+
+    quiche_conn_set_max_idle_timeout(qc->connection, conf->idle_timeout);
+
+    if (ngx_quiche_open_sockets(c, qc, pkt, qsock) != NGX_OK) {
+        quiche_conn_free(qc->connection);
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_quiche_input_handler(ngx_event_t *rev)
+{
+    ngx_buf_t              *b;
+    ngx_connection_t       *pc;
+    ngx_quic_connection_t  *qc;
+
+    pc = rev->data;
+    qc = ngx_quic_get_connection(pc);
+
+    if (pc->close) {
+        pc->close = 0;
+
+        if (!ngx_exiting || !qc->streams.initialized) {
+            qc->error = NGX_QUIC_ERR_NO_ERROR;
+            qc->error_reason = "graceful shutdown";
+
+            ngx_quiche_close_connection(pc, NGX_OK);
+            return;
+        }
+
+        if (!qc->closing && qc->conf->shutdown) {
+            qc->conf->shutdown(pc);
+        }
+
+        return;
+    }
+
+    b = pc->udp->buffer;
+    if (b == NULL) {
+        return;
+    }
+
+    if (ngx_quiche_handle_datagram(pc, b) != NGX_OK) {
+        ngx_quiche_close_connection(pc, NGX_ERROR);
+        return;
+    }
+}
+
+
+static ngx_int_t
+ngx_quiche_handle_datagram(ngx_connection_t *pc, ngx_buf_t *b)
+{
+    quiche_recv_info        recv_info;
+    ngx_quic_socket_t      *qsock;
+    ngx_quic_connection_t  *qc;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, pc->log, 0,
+                   "quiche connection input handler");
+
+    qsock = ngx_quic_get_socket(pc);
+    qc = ngx_quic_get_connection(pc);
+
+    recv_info.from = (struct sockaddr *) &qsock->sockaddr;
+    recv_info.from_len = qsock->socklen;
+    recv_info.to = pc->local_sockaddr;
+    recv_info.to_len = pc->local_socklen;
+
+    ssize_t done = quiche_conn_recv(qc->connection, b->pos, ngx_buf_size(b),
+                                    &recv_info);
+    if (done < 0) {
+        return NGX_ERROR;
+    }
+
+    if (!pc->ssl->handshaked) {
+        if (quiche_conn_is_established(qc->connection)
+            || quiche_conn_is_in_early_data(qc->connection))
+        {
+#if (NGX_DEBUG)
+            ngx_ssl_handshake_log(pc);
+#endif
+
+            if (qc->conf->retry) {
+                if (ngx_quiche_send_new_token(pc) != NGX_OK) {
+                    qc->error_reason = "failed to send new token";
+                    return NGX_ERROR;
+                }
+            }
+
+            if (ngx_quic_create_sockets(pc) != NGX_OK) {
+                qc->error_reason = "failed to create sockets";
+                return NGX_ERROR;
+            }
+
+            if (ngx_quic_init_streams(pc) != NGX_OK) {
+                qc->error_reason = "failed to initialize streams";
+                return NGX_ERROR;
+            }
+
+            pc->ssl->handshaked = 1;
+        }
+    }
+
+    if (ngx_quiche_handle_retired_scids(pc) != NGX_OK) {
+        qc->error_reason = "failed to handle retired scids";
+        return NGX_ERROR;
+    }
+
+    if (ngx_quiche_process_control_events(pc) != NGX_OK) {
+        qc->error_reason = "failed to process control events";
+        return NGX_ERROR;
+    }
+
+    if (ngx_quiche_process_writable_streams(pc) != NGX_OK) {
+        qc->error_reason = "failed to process writable streams";
+        return NGX_ERROR;
+    }
+
+    if (ngx_quiche_process_readable_streams(pc) != NGX_OK) {
+        qc->error_reason = "failed to process readable streams";
+        return NGX_ERROR;
+    }
+
+    ngx_post_event(pc->write, &ngx_posted_events);
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_quiche_close_handler(ngx_event_t *ev)
+{
+    ngx_connection_t       *c;
+    ngx_quic_connection_t  *qc;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, ev->log, 0, "quiche close handler");
+
+    c = ev->data;
+    qc = ngx_quic_get_connection(c);
+
+    if (ev->timedout) {
+        quiche_conn_on_timeout(qc->connection);
+
+        ngx_post_event(c->write, &ngx_posted_events);
+    }
+
+    if (qc->error
+        || quiche_conn_is_timed_out(qc->connection)
+        || quiche_conn_is_closed(qc->connection))
+    {
+        ngx_quiche_close_connection(c, NGX_OK);
+    }
+}
+
+
+static void
+ngx_quiche_set_timer(ngx_connection_t *c)
+{
+    uint64_t                expiry;
+    ngx_event_t            *ev;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+    ev = &qc->close; 
+
+    expiry = quiche_conn_timeout_as_millis(qc->connection);
+    expiry = ngx_max(expiry, 1);
+
+    if (ev->timer_set) {
+        ngx_del_timer(ev);
+    }
+
+    if (expiry != UINT64_MAX) {
+        ngx_add_timer(ev, (ngx_msec_t)expiry);
+    }
+}
+
+
+static ngx_int_t
+ngx_quiche_handle_initial_packet(ngx_connection_t *c, ngx_quic_conf_t *conf)
+{
+    uint8_t            dcid[NGX_QUIC_CID_LEN_MAX];
+    uint8_t            scid[NGX_QUIC_CID_LEN_MAX];
+    uint8_t            token[NGX_QUIC_TOKEN_BUF_SIZE];
+    ngx_int_t          rc;
+    ngx_quic_header_t  pkt;
+ 
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                   "quiche handle initial packet");
+
+    ngx_memzero(&pkt, sizeof(ngx_quic_header_t));
+
+    pkt.dcid.data = dcid;
+    pkt.dcid.len = sizeof(dcid);
+    pkt.scid.data = scid;
+    pkt.scid.len = sizeof(scid);
+    pkt.token.data = token;
+    pkt.token.len = sizeof(token);
+
+    rc = quiche_header_info(c->buffer->pos, ngx_buf_size(c->buffer),
+                            NGX_QUIC_CID_LEN_MAX, &pkt.version, &pkt.flags,
+                            pkt.scid.data, &pkt.scid.len, pkt.dcid.data,
+                            &pkt.dcid.len, pkt.token.data, &pkt.token.len);
+    if (rc < 0) {
+        ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                      "quiche_header_info failed: %d", (int) rc);
+        return NGX_ERROR;
+    }
+
+    if (!quiche_version_is_supported(pkt.version)) {
+        return ngx_quic_negotiate_version(c, &pkt);
+    }
+
+    if (pkt.dcid.len < NGX_QUIC_CID_LEN_MIN) {
+        /* RFC 9000, 7.2.  Negotiating Connection IDs */
+        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                      "quic too short dcid in initial"
+                      " packet: len:%i", pkt.dcid.len);
+        return NGX_ERROR;
+    }
+
+    if (pkt.token.len) {
+
+        rc = ngx_quic_validate_token(c, conf->av_token_key, &pkt);
+
+        if (rc == NGX_ERROR) {
+            /* internal error */
+            return NGX_ERROR;
+
+        } else if (rc == NGX_ABORT) {
+            /* token cannot be decrypted */
+            return ngx_quic_send_early_cc(c, &pkt,
+                                          NGX_QUIC_ERR_INVALID_TOKEN,
+                                          "cannot decrypt token");
+        } else if (rc == NGX_DECLINED) {
+            /* token is invalid */
+
+            if (pkt.retried) {
+                /* invalid address validation token */
+                return ngx_quic_send_early_cc(c, &pkt,
+                                           NGX_QUIC_ERR_INVALID_TOKEN,
+                                           "invalid address validation token");
+            } else if (conf->retry) {
+                /* invalid NEW_TOKEN */
+                return ngx_quic_send_retry(c, conf, &pkt);
+            }
+        }
+
+        /* NGX_OK */
+
+    } else if (conf->retry) {
+        return ngx_quic_send_retry(c, conf, &pkt);
+
+    } else {
+        pkt.odcid = pkt.dcid;
+    }
+
+    if (ngx_terminate || ngx_exiting) {
+        if (conf->retry) {
+            return ngx_quic_send_retry(c, conf, &pkt);
+        }
+
+        return NGX_ERROR;
+    }
+
+    if (ngx_quic_new_connection(c, conf, &pkt) == NULL) {
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;
+}
+
+
+static void
+ngx_quiche_push_handler(ngx_event_t *wev)
+{
+    ngx_connection_t  *pc;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_EVENT, wev->log, 0,
+                   "quiche connection write handler");
+
+    pc = wev->data;
+
+    wev->timedout = 0;
+
+    if (ngx_quiche_output(pc) == NGX_ERROR) {
+        ngx_quiche_close_connection(pc, NGX_ERROR);
+    }
+
+    ngx_quiche_set_timer(pc);
+}
+
+
+static void
+ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc)
+{
+    ngx_pool_t             *pool;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+    if (qc == NULL) {
+        goto quic_done;
+    }
+
+    if (!qc->closing) {
+        if (qc->error == 0 && rc == NGX_ERROR) {
+            qc->error = NGX_QUIC_ERR_INTERNAL_ERROR;
+            qc->error_app = 0;
+        }
+
+        quiche_conn_close(qc->connection, qc->error_app, qc->error,
+                          (const u_char*)qc->error_reason,
+                          qc->error_reason ? ngx_strlen(qc->error_reason) : 0);
+
+        qc->closing = 1;
+
+        (void) ngx_quiche_output(c);
+
+        ngx_post_event(&qc->close, &ngx_posted_events);
+    }
+
+    if (ngx_quic_close_streams(c, qc) == NGX_AGAIN) {
+        return;
+    }
+
+    if (qc->close.timer_set) {
+        ngx_del_timer(&qc->close);
+    }
+
+    if (qc->close.posted) {
+        ngx_delete_posted_event(&qc->close);
+    }
+
+#if (NGX_QC_SHM_LOG)
+    ngx_qc_shm_log_write(c, qc);
+#endif
+
+    if (qc->connection != NULL) {
+        quiche_conn_free(qc->connection);
+    }
+
+    ERR_clear_error();
+
+    ngx_quic_close_sockets(c);
+
+quic_done:
+    if (c->write->timer_set) {
+        ngx_del_timer(c->write);
+    }
+
+    if (c->write->posted) {
+        ngx_delete_posted_event(c->write);
+    }
+
+#if (NGX_STAT_STUB)
+    (void) ngx_atomic_fetch_add(ngx_stat_active, -1);
+#endif
+
+    c->destroyed = 1;
+
+    pool = c->pool;
+
+    ngx_close_connection(c);
+
+    ngx_destroy_pool(pool);
+}
+
+
+void
+ngx_quiche_config_cleanup_handler(void *data)
+{
+    quiche_config  *config = data;
+
+    quiche_config_free(config);
+}
+
+
+ngx_int_t
+ngx_quiche_config_new(ngx_quic_conf_t *qcf)
+{
+    ngx_uint_t        nstreams;
+    quiche_config    *config;
+
+    config = quiche_config_new(QUICHE_PROTOCOL_VERSION);
+    if (config == NULL) {
+        return NGX_ERROR;
+    }
+
+    nstreams = qcf->max_concurrent_streams_bidi
+               + qcf->max_concurrent_streams_uni;
+
+    if (qcf->max_recv_udp_payload_size != NGX_CONF_UNSET_SIZE) {
+        quiche_config_set_max_recv_udp_payload_size(config,
+                                               qcf->max_recv_udp_payload_size);
+    }
+
+    quiche_config_discover_pmtu(config, qcf->discover_pmtu);
+    quiche_config_set_initial_max_data(config, nstreams * 16777216);
+    quiche_config_set_initial_max_stream_data_bidi_local(config, 16777216);
+    quiche_config_set_initial_max_stream_data_bidi_remote(config, 16777216);
+    quiche_config_set_send_capacity_factor(config, qcf->send_capacity_factor);
+    quiche_config_set_initial_max_stream_data_uni(config, nstreams * 16777216);
+
+    quiche_config_set_disable_active_migration(config,
+                                               qcf->disable_active_migration);
+    quiche_config_set_max_send_udp_payload_size(config,
+                                               qcf->max_send_udp_payload_size);
+    quiche_config_set_initial_max_streams_uni(config,
+                                              qcf->max_concurrent_streams_uni);
+    quiche_config_set_active_connection_id_limit(config,
+                                              qcf->active_connection_id_limit);
+    quiche_config_set_initial_max_streams_bidi(config,
+                                             qcf->max_concurrent_streams_bidi);
+    quiche_config_set_application_protos(config,
+                                   (uint8_t *) QUICHE_H3_APPLICATION_PROTOCOL,
+                                   sizeof(QUICHE_H3_APPLICATION_PROTOCOL) - 1);
+
+    qcf->config = config;
+
+    return NGX_OK;
+}
+
+
+#if (NGX_DEBUG)
+
+void
+ngx_quiche_log(const char *line, void *argp)
+{
+    ngx_log_t  *log;
+
+    log = ngx_cycle->log;
+
+    ngx_log_debug1(NGX_LOG_DEBUG_EVENT, log, 0, "%s", line);
+}
+
+#endif
+
+#endif

@@ -13,6 +13,11 @@
 
 ngx_int_t ngx_quic_init_connection(ngx_connection_t *c);
 
+#if (NGX_QUICHE)
+ngx_int_t ngx_quiche_init_connection(ngx_connection_t *c,
+    ngx_quic_connection_t *qc);
+#endif
+
 ngx_int_t ngx_quic_handle_crypto_frame(ngx_connection_t *c,
     ngx_quic_header_t *pkt, ngx_quic_frame_t *frame);
 

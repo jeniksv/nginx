@@ -11,6 +11,10 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
+#if (NGX_QUICHE)
+#include "quiche.h"
+#endif
+
 #define NGX_QUIC_MODULE                      0x43495551   /* "QUIC" */
 
 #if (OPENSSL_VERSION_NUMBER >= 0x30500010L)
@@ -36,6 +40,9 @@
 #define NGX_QUIC_DEFAULT_HOST_KEY_LEN        32
 #define NGX_QUIC_SR_KEY_LEN                  32
 #define NGX_QUIC_AV_KEY_LEN                  32
+
+#define NGX_QUIC_CID_LEN_MIN                 8
+#define NGX_QUIC_CID_LEN_MAX                 20
 
 #define NGX_QUIC_SR_TOKEN_LEN                16
 
@@ -105,6 +112,19 @@ typedef struct {
 
     u_char                         av_token_key[NGX_QUIC_AV_KEY_LEN];
     u_char                         sr_token_key[NGX_QUIC_SR_KEY_LEN];
+
+#if (NGX_QUICHE)
+    quiche_config                 *config;
+
+    ngx_flag_t                     discover_pmtu;
+
+    ngx_str_t                      keylog_path;
+
+    size_t                         max_recv_udp_payload_size;
+    size_t                         max_send_udp_payload_size;
+
+    ngx_uint_t                     send_capacity_factor;
+#endif
 } ngx_quic_conf_t;
 
 
@@ -161,5 +181,19 @@ ngx_int_t ngx_quic_get_packet_dcid(ngx_log_t *log, u_char *data, size_t len,
     ngx_str_t *dcid);
 ngx_int_t ngx_quic_derive_key(ngx_log_t *log, const char *label,
     ngx_str_t *secret, ngx_str_t *salt, u_char *out, size_t len);
+
+#if (NGX_QUICHE)
+void ngx_quiche_stream_init(ngx_quic_stream_t *qs);
+ngx_int_t ngx_quiche_process_control_events(ngx_connection_t *pc);
+ngx_int_t ngx_quiche_process_writable_streams(ngx_connection_t *c);
+ngx_int_t ngx_quiche_process_readable_streams(ngx_connection_t *c);
+
+#if (NGX_DEBUG)
+void ngx_quiche_log(const char *line, void *argp);
+#endif
+
+void ngx_quiche_config_cleanup_handler(void *data);
+ngx_int_t ngx_quiche_config_new(ngx_quic_conf_t *conf);
+#endif
 
 #endif /* _NGX_EVENT_QUIC_H_INCLUDED_ */

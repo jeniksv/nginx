@@ -163,6 +163,9 @@ USE_OPENSSL=NO
 USE_OPENSSL_QUIC=NO
 OPENSSL=NONE
 
+USE_QUICHE=NO
+QUICHE=NONE
+
 USE_ZLIB=NO
 ZLIB=NONE
 ZLIB_OPT=
@@ -422,6 +425,8 @@ $0: warning: the \"--with-sha1-opt\" option is deprecated"
 $0: warning: the \"--with-sha1-asm\" option is deprecated"
         ;;
 
+        --with-quiche=*)                 QUICHE="$value"            ;;
+
         --with-zlib=*)                   ZLIB="$value"              ;;
         --with-zlib-opt=*)               ZLIB_OPT="$value"          ;;
         --with-zlib-asm=*)               ZLIB_ASM="$value"          ;;
@@ -623,6 +628,8 @@ cat << END
   --with-pcre-opt=OPTIONS            set additional build options for PCRE
   --with-pcre-jit                    build PCRE with JIT compilation support
   --without-pcre2                    do not use PCRE2 library
+
+  --with-quiche=PATH                 enable quiche build
 
   --with-zlib=DIR                    set path to zlib library sources
   --with-zlib-opt=OPTIONS            set additional build options for zlib
