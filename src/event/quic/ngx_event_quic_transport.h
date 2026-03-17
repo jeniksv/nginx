@@ -132,9 +132,6 @@
 #define NGX_QUIC_TP_INITIAL_SCID                         0x0F
 #define NGX_QUIC_TP_RETRY_SCID                           0x10
 
-#define NGX_QUIC_CID_LEN_MIN                                8
-#define NGX_QUIC_CID_LEN_MAX                               20
-
 #define NGX_QUIC_MAX_RANGES                                10
 
 

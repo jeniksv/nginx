@@ -27,6 +27,11 @@ ngx_int_t ngx_quic_send_retry(ngx_connection_t *c,
     ngx_quic_conf_t *conf, ngx_quic_header_t *pkt);
 ngx_int_t ngx_quic_send_new_token(ngx_connection_t *c, ngx_quic_path_t *path);
 
+#if (NGX_QUICHE)
+ngx_int_t ngx_quiche_output(ngx_connection_t *pc);
+ngx_int_t ngx_quiche_send_new_token(ngx_connection_t *c);
+#endif /* NGX_QUICHE */
+
 ngx_int_t ngx_quic_send_ack(ngx_connection_t *c,
     ngx_quic_send_ctx_t *ctx);
 ngx_int_t ngx_quic_send_ack_range(ngx_connection_t *c,

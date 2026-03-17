@@ -227,6 +227,10 @@ struct ngx_quic_send_ctx_s {
 
 
 struct ngx_quic_connection_s {
+#if (NGX_QUICHE)
+    quiche_conn                      *connection;
+#endif
+
     uint32_t                          version;
 
     ngx_quic_max_server_ids_pt        max_server_ids;
