@@ -24,5 +24,12 @@ void ngx_quic_close_socket(ngx_connection_t *c, ngx_quic_socket_t *qsock);
 
 ngx_quic_socket_t *ngx_quic_find_socket(ngx_connection_t *c, uint64_t seqnum);
 
+#if (NGX_QUICHE)
+ngx_int_t ngx_quiche_open_sockets(ngx_connection_t *c, ngx_quic_connection_t *qc,
+    ngx_quic_header_t *pkt, ngx_quic_socket_t *qsock);
+ngx_quic_socket_t *ngx_quic_find_socket_by_id(ngx_connection_t *c,
+    const u_char *id, size_t len);
+#endif
+
 
 #endif /* _NGX_EVENT_QUIC_SOCKET_H_INCLUDED_ */

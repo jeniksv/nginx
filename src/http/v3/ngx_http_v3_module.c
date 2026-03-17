@@ -13,6 +13,9 @@
 static ngx_int_t ngx_http_v3_variable(ngx_http_request_t *r,
     ngx_http_variable_value_t *v, uintptr_t data);
 static ngx_int_t ngx_http_v3_add_variables(ngx_conf_t *cf);
+#if (NGX_QUICHE && NGX_DEBUG)
+static ngx_int_t ngx_http_v3_postconfiguration(ngx_conf_t *cf);
+#endif
 static void *ngx_http_v3_create_srv_conf(ngx_conf_t *cf);
 static char *ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent,
     void *child);
@@ -84,7 +87,11 @@ static ngx_command_t  ngx_http_v3_commands[] = {
 
 static ngx_http_module_t  ngx_http_v3_module_ctx = {
     ngx_http_v3_add_variables,             /* preconfiguration */
+#if (NGX_QUICHE && NGX_DEBUG)
+    ngx_http_v3_postconfiguration,         /* postconfiguration */
+#else
     NULL,                                  /* postconfiguration */
+#endif
 
     NULL,                                  /* create main configuration */
     NULL,                                  /* init main configuration */
@@ -210,6 +217,10 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
 
+#if (NGX_QUICHE)
+    h3scf->quic.config = NGX_CONF_UNSET_PTR;
+#endif
+
     h3scf->quic.init = ngx_http_v3_init;
     h3scf->quic.shutdown = ngx_http_v3_shutdown;
 
@@ -223,6 +234,9 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_v3_srv_conf_t *prev = parent;
     ngx_http_v3_srv_conf_t *conf = child;
 
+#if (NGX_QUICHE)
+    ngx_pool_cleanup_t        *cln;
+#endif
     ngx_http_ssl_srv_conf_t   *sscf;
     ngx_http_core_srv_conf_t  *cscf;
 
@@ -288,8 +302,37 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     sscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_ssl_module);
     conf->quic.ssl = &sscf->ssl;
 
+#if (NGX_QUICHE)
+    if (ngx_quiche_config_new(&conf->quic) != NGX_OK) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "failed to create quiche config");
+        return NGX_CONF_ERROR;
+    }
+
+    cln = ngx_pool_cleanup_add(cf->pool, 0);
+    if (cln == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    cln->handler = ngx_quiche_config_cleanup_handler;
+    cln->data = conf->quic.config;
+#endif
+
     return NGX_CONF_OK;
 }
+
+
+#if (NGX_QUICHE && NGX_DEBUG)
+
+static ngx_int_t
+ngx_http_v3_postconfiguration(ngx_conf_t *cf)
+{
+    quiche_enable_debug_logging(ngx_quiche_log, NULL);
+
+    return NGX_OK;
+}
+
+#endif
 
 
 static char *
