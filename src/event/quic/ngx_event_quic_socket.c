@@ -235,3 +235,83 @@ ngx_quic_find_socket(ngx_connection_t *c, uint64_t seqnum)
 
     return NULL;
 }
+
+
+#if (NGX_QUICHE)
+ngx_quic_socket_t *
+ngx_quic_find_socket_by_id(ngx_connection_t *c, const u_char *id, size_t len)
+{
+    ngx_queue_t            *q;
+    ngx_quic_socket_t      *qsock;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    for (q = ngx_queue_head(&qc->sockets);
+         q != ngx_queue_sentinel(&qc->sockets);
+         q = ngx_queue_next(q))
+    {
+        qsock = ngx_queue_data(q, ngx_quic_socket_t, queue);
+
+        if (qsock->sid.len == len
+            && ngx_memcmp(qsock->sid.id, id, len) == 0)
+        {
+            return qsock;
+        }
+    }
+
+    return NULL;
+}
+
+
+ngx_int_t
+ngx_quiche_open_sockets(ngx_connection_t *c, ngx_quic_connection_t *qc,
+    ngx_quic_header_t *pkt, ngx_quic_socket_t *qsock)
+{
+    ngx_quic_socket_t  *tmp;
+
+    ngx_queue_init(&qc->sockets);
+    ngx_queue_init(&qc->free_sockets);
+
+    if (ngx_quic_listen(c, qc, qsock) != NGX_OK) {
+        goto failed;
+    }
+
+    qsock->used = 1;
+
+    /* for all packets except first, this is set at udp layer */
+    c->udp = &qsock->udp;
+    c->udp->buffer = c->buffer;
+
+    if (pkt->retried) {
+        return NGX_OK;
+    }
+
+    tmp = ngx_pcalloc(c->pool, sizeof(ngx_quic_socket_t));
+    if (tmp == NULL) {
+        goto failed;
+    }
+
+    tmp->sid.seqnum = NGX_QUIC_UNSET_PN; /* temporary socket */
+    tmp->sid.len = pkt->dcid.len;
+    ngx_memcpy(tmp->sid.id, pkt->dcid.data, pkt->dcid.len);
+
+    ngx_memcpy(&tmp->sockaddr, c->sockaddr, c->socklen);
+    tmp->socklen = c->socklen;
+
+    if (ngx_quic_listen(c, qc, tmp) != NGX_OK) {
+        goto failed;
+    }
+
+    return NGX_OK;
+
+failed:
+
+    if (c->udp) {
+        ngx_quic_close_sockets(c);
+        c->udp = NULL;
+    }
+
+    return NGX_ERROR;
+}
+#endif

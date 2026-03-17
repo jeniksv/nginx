@@ -42,4 +42,10 @@ void ngx_quic_discover_path_mtu(ngx_connection_t *c, ngx_quic_path_t *path);
 ngx_int_t ngx_quic_handle_path_mtu(ngx_connection_t *c,
     ngx_quic_path_t *path, uint64_t min, uint64_t max);
 
+#if (NGX_QUICHE)
+ngx_int_t ngx_quiche_update_peer_addr(ngx_connection_t *pc);
+ngx_int_t ngx_quiche_set_peer_addr(ngx_connection_t *pc, struct sockaddr *peer,
+    socklen_t peer_len);
+#endif
+
 #endif /* _NGX_EVENT_QUIC_MIGRATION_H_INCLUDED_ */

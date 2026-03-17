@@ -258,6 +258,10 @@ if [ $HTTP = YES ]; then
         . auto/module
     fi
 
+    if [ $HTTP_V3 = YES -a $QUICHE != NONE ]; then
+        USE_QUICHE=YES
+    fi
+
     if [ $HTTP_GZIP = YES ]; then
         have=NGX_HTTP_GZIP . auto/have
         USE_ZLIB=YES
@@ -1459,6 +1463,19 @@ if [ $USE_OPENSSL_QUIC = YES ]; then
     ngx_module_order=
 
     . auto/module
+
+    if [ $USE_QUICHE = YES ]; then
+        ngx_module_type=CORE
+        ngx_module_name=ngx_quic_quiche_module
+        ngx_module_incs=
+        ngx_module_deps=
+        ngx_module_srcs=
+        ngx_module_libs=
+        ngx_module_link=YES
+        ngx_module_order=
+
+        . auto/module
+    fi
 
     if [ $QUIC_BPF = YES -a $SO_COOKIE_FOUND = YES ]; then
         ngx_module_type=CORE

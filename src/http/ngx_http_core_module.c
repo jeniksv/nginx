@@ -4355,8 +4355,11 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             ngx_str_t  name;
 
             if (value[n].len == 4) {
+#if (NGX_QUICHE)
+                ngx_str_set(&name, "quiche");
+#else
                 ngx_str_set(&name, "nginx");
-
+#endif
             } else {
                 name.data = &value[n].data[5];
                 name.len = value[n].len - 5;
