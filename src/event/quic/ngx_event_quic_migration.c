@@ -1005,3 +1005,64 @@ ngx_quic_handle_path_mtu(ngx_connection_t *c, ngx_quic_path_t *path,
 
     return NGX_OK;
 }
+
+
+#if (NGX_QUICHE)
+
+ngx_int_t
+ngx_quiche_set_peer_addr(ngx_connection_t *pc, struct sockaddr *peer_addr,
+    socklen_t peer_len)
+{
+    ngx_sockaddr_t  *sa;
+
+    sa = ngx_palloc(pc->pool, sizeof(ngx_sockaddr_t));
+    if (sa == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_memzero(sa, sizeof(ngx_sockaddr_t));
+    ngx_memcpy(sa, peer_addr, peer_len);
+
+    pc->sockaddr = (struct sockaddr *) sa;
+    pc->socklen = peer_len;
+
+    if (pc->addr_text.data) {
+        pc->addr_text.len = ngx_sock_ntop(pc->sockaddr, pc->socklen,
+                                          pc->addr_text.data,
+                                          pc->listening->addr_text_max_len, 0);
+    } else {
+        pc->addr_text.len = 0;
+    }
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+ngx_quiche_update_peer_addr(ngx_connection_t *pc)
+{
+    ngx_quic_socket_t      *qsock;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(pc);
+    qsock = ngx_quic_get_socket(pc);
+
+    if (qc == NULL || qsock == NULL) {
+        return NGX_OK;
+    }
+
+    /* current packet already uses the same peer tuple */
+    if (ngx_cmp_sockaddr(pc->sockaddr, pc->socklen,
+                         (struct sockaddr *) &qsock->sockaddr, qsock->socklen,
+                         1)
+        == NGX_OK)
+    {
+        return NGX_OK;
+    }
+
+    return ngx_quiche_set_peer_addr(pc,
+                                    (struct sockaddr *) &qsock->sockaddr,
+                                    qsock->socklen);
+}
+
+#endif

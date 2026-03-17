@@ -43,4 +43,9 @@ ngx_int_t ngx_quic_close_streams(ngx_connection_t *c,
 ngx_uint_t ngx_quic_server_streams_left(ngx_connection_t *c,
     ngx_uint_t bidi);
 
+#if (NGX_QUICHE)
+ngx_uint_t ngx_quiche_server_streams_left(ngx_connection_t *c,
+    ngx_uint_t bidi);
+#endif
+
 #endif /* _NGX_EVENT_QUIC_STREAMS_H_INCLUDED_ */

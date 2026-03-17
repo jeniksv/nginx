@@ -180,6 +180,7 @@ ngx_quic_recvmsg(ngx_event_t *ev)
             buf.last = buffer + n;
             buf.start = buf.pos;
             buf.end = buffer + sizeof(buffer);
+            buf.memory = 1;
 
             qsock = ngx_quic_get_socket(c);
 
