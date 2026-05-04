@@ -9,9 +9,6 @@
 #include <ngx_core.h>
 
 
-static ngx_msec_t ngx_monotonic_time(time_t sec, ngx_uint_t msec);
-
-
 /*
  * The time may be updated by signal handler or by several threads.
  * The time update operations are rare and require to hold the ngx_time_lock.
@@ -96,7 +93,7 @@ ngx_time_update(void)
     sec = tv.tv_sec;
     msec = tv.tv_usec / 1000;
 
-    ngx_current_msec = ngx_monotonic_time(sec, msec);
+    ngx_current_msec = (ngx_msec_t) (ngx_monotonic_nsec() / NGX_NSEC_PER_MSEC);
 
     tp = &cached_time[slot];
 
@@ -192,20 +189,29 @@ ngx_time_update(void)
 }
 
 
-static ngx_msec_t
-ngx_monotonic_time(time_t sec, ngx_uint_t msec)
+#if (NGX_HAVE_CLOCK_MONOTONIC)
+
+ngx_nsec_t
+ngx_timespec_to_nsec(const struct timespec *ts)
+{
+    return (ngx_nsec_t) ts->tv_sec * NGX_NSEC_PER_SEC + ts->tv_nsec;
+}
+
+#endif
+
+
+ngx_nsec_t
+ngx_monotonic_nsec(void)
 {
 #if (NGX_HAVE_CLOCK_MONOTONIC)
     struct timespec  ts;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
-    sec = ts.tv_sec;
-    msec = ts.tv_nsec / 1000000;
-
+    return ngx_timespec_to_nsec(&ts);
+#else
+#error clock_gettime(CLOCK_MONOTONIC) is required!
 #endif
-
-    return (ngx_msec_t) sec * 1000 + msec;
 }
 
 
