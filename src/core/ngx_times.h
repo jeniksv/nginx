@@ -13,6 +13,11 @@
 #include <ngx_core.h>
 
 
+#define NGX_NSEC_PER_SEC     1000000000
+#define NGX_NSEC_PER_MSEC    1000000
+#define NGX_NSEC_PER_USEC    1000
+
+
 typedef struct {
     time_t      sec;
     ngx_uint_t  msec;
@@ -23,6 +28,10 @@ typedef struct {
 void ngx_time_init(void);
 void ngx_time_update(void);
 void ngx_time_sigsafe_update(void);
+#if (NGX_HAVE_CLOCK_MONOTONIC)
+ngx_nsec_t ngx_timespec_to_nsec(const struct timespec *ts);
+#endif
+ngx_nsec_t ngx_monotonic_nsec(void);
 u_char *ngx_http_time(u_char *buf, time_t t);
 u_char *ngx_http_cookie_time(u_char *buf, time_t t);
 void ngx_gmtime(time_t t, ngx_tm_t *tp);
