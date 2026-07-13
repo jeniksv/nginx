@@ -61,14 +61,17 @@ static void ngx_quic_init_packet(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
     ngx_quic_header_t *pkt, ngx_quic_path_t *path);
 static ngx_uint_t ngx_quic_get_padding_level(ngx_connection_t *c);
 static ssize_t ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
-    struct sockaddr *sockaddr, socklen_t socklen);
+    struct sockaddr *sockaddr, socklen_t socklen, uint64_t txtime_ns);
 static void ngx_quic_set_packet_number(ngx_quic_header_t *pkt,
     ngx_quic_send_ctx_t *ctx);
 static ngx_int_t ngx_quic_stateless_reset_filter(ngx_connection_t *c);
 
 #if (NGX_QUICHE)
 static ssize_t ngx_quiche_send_datagram(ngx_connection_t *pc, u_char *buf,
-    size_t len, struct sockaddr *sockaddr, socklen_t socklen, size_t segment);
+    size_t len, struct sockaddr *sockaddr, socklen_t socklen, size_t segment,
+    uint64_t at);
+static ngx_int_t ngx_quiche_schedule_output(ngx_connection_t *pc,
+    ngx_nsec_t now, ngx_nsec_t next_at, ngx_nsec_t max_ptif);
 #endif /* NGX_QUICHE */
 
 
@@ -179,7 +182,7 @@ ngx_quic_create_datagrams(ngx_connection_t *c)
             break;
         }
 
-        n = ngx_quic_send(c, dst, len, path->sockaddr, path->socklen);
+        n = ngx_quic_send(c, dst, len, path->sockaddr, path->socklen, 0);
 
         if (n == NGX_ERROR) {
             return NGX_ERROR;
@@ -722,17 +725,25 @@ ngx_quic_init_packet(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
 
 static ssize_t
 ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
-    struct sockaddr *sockaddr, socklen_t socklen)
+    struct sockaddr *sockaddr, socklen_t socklen, uint64_t txtime_ns)
 {
     ssize_t          n;
+    size_t           clen;
     struct iovec     iov;
     struct msghdr    msg;
-#if (NGX_HAVE_ADDRINFO_CMSG)
     struct cmsghdr  *cmsg;
-    char             msg_control[CMSG_SPACE(sizeof(ngx_addrinfo_t))];
+    char             msg_control[
+#if (NGX_HAVE_ADDRINFO_CMSG)
+                         CMSG_SPACE(sizeof(ngx_addrinfo_t)) +
 #endif
+#if (NGX_HAVE_TXTIME)
+                         CMSG_SPACE(sizeof(uint64_t)) +
+#endif
+                         0];
 
     ngx_memzero(&msg, sizeof(struct msghdr));
+
+    clen = 0;
 
     iov.iov_len = len;
     iov.iov_base = (void *) buf;
@@ -751,10 +762,34 @@ ngx_quic_send(ngx_connection_t *c, u_char *buf, size_t len,
         ngx_memzero(msg_control, sizeof(msg_control));
 
         cmsg = CMSG_FIRSTHDR(&msg);
-
-        msg.msg_controllen = ngx_set_srcaddr_cmsg(cmsg, c->local_sockaddr);
+        clen = ngx_set_srcaddr_cmsg(cmsg, c->local_sockaddr);
     }
 #endif
+
+#if (NGX_HAVE_TXTIME)
+    if (c->listening && c->listening->supports_release_time
+        && txtime_ns > 0)
+    {
+        if (clen == 0) {
+            msg.msg_control = (void *) msg_control;
+            msg.msg_controllen = sizeof(msg_control);
+            ngx_memzero(msg_control, sizeof(msg_control));
+            cmsg = CMSG_FIRSTHDR(&msg);
+        } else {
+            cmsg = CMSG_NXTHDR(&msg, cmsg);
+        }
+
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SO_TXTIME;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
+        memcpy(CMSG_DATA(cmsg), &txtime_ns, sizeof(txtime_ns));
+        clen += CMSG_SPACE(sizeof(uint64_t));
+    }
+#endif
+
+    if (clen > 0) {
+        msg.msg_controllen = clen;
+    }
 
     n = ngx_sendmsg(c, &msg, 0);
     if (n < 0) {
@@ -819,7 +854,7 @@ ngx_quic_negotiate_version(ngx_connection_t *c, ngx_quic_header_t *inpkt)
                    "quic vnego packet to send len:%uz %*xs", len, len, buf);
 #endif
 
-    (void) ngx_quic_send(c, buf, len, c->sockaddr, c->socklen);
+    (void) ngx_quic_send(c, buf, len, c->sockaddr, c->socklen, 0);
 
     return NGX_DONE;
 }
@@ -876,7 +911,7 @@ ngx_quic_send_stateless_reset(ngx_connection_t *c, ngx_quic_conf_t *conf,
         return NGX_ERROR;
     }
 
-    (void) ngx_quic_send(c, buf, len, c->sockaddr, c->socklen);
+    (void) ngx_quic_send(c, buf, len, c->sockaddr, c->socklen, 0);
 
     return NGX_DECLINED;
 }
@@ -1046,7 +1081,7 @@ ngx_quic_send_early_cc(ngx_connection_t *c, ngx_quic_header_t *inpkt,
         return NGX_ERROR;
     }
 
-    if (ngx_quic_send(c, res.data, res.len, c->sockaddr, c->socklen) < 0) {
+    if (ngx_quic_send(c, res.data, res.len, c->sockaddr, c->socklen, 0) < 0) {
         ngx_quic_keys_cleanup(pkt.keys);
         return NGX_ERROR;
     }
@@ -1111,7 +1146,7 @@ ngx_quic_send_retry(ngx_connection_t *c, ngx_quic_conf_t *conf,
                    "quic packet to send len:%uz %xV", res.len, &res);
 #endif
 
-    len = ngx_quic_send(c, res.data, res.len, c->sockaddr, c->socklen);
+    len = ngx_quic_send(c, res.data, res.len, c->sockaddr, c->socklen, 0);
     if (len < 0) {
         return NGX_ERROR;
     }
@@ -1361,7 +1396,7 @@ ngx_quic_frame_sendto(ngx_connection_t *c, ngx_quic_frame_t *frame,
 
     ctx->pnum++;
 
-    sent = ngx_quic_send(c, res.data, res.len, path->sockaddr, path->socklen);
+    sent = ngx_quic_send(c, res.data, res.len, path->sockaddr, path->socklen, 0);
     if (sent < 0) {
         ngx_quic_free_frame(c, frame);
         return sent;
@@ -1445,7 +1480,7 @@ ngx_quiche_send_new_token(ngx_connection_t *c)
 
 static ssize_t
 ngx_quiche_send_datagram(ngx_connection_t *pc, u_char *buf, size_t len,
-    struct sockaddr *sockaddr, socklen_t socklen, size_t segment)
+    struct sockaddr *sockaddr, socklen_t socklen, size_t segment, uint64_t at)
 {
     ssize_t     n;
     ngx_uint_t  log_error;
@@ -1453,7 +1488,7 @@ ngx_quiche_send_datagram(ngx_connection_t *pc, u_char *buf, size_t len,
     log_error = pc->log_error;
     pc->log_error = NGX_ERROR_IGNORE_EMSGSIZE;
 
-    n = ngx_quic_send(pc, buf, len, sockaddr, socklen);
+    n = ngx_quic_send(pc, buf, len, sockaddr, socklen, at);
 
     pc->log_error = log_error;
 
@@ -1473,17 +1508,56 @@ ngx_quiche_send_datagram(ngx_connection_t *pc, u_char *buf, size_t len,
 }
 
 
+static ngx_int_t
+ngx_quiche_schedule_output(ngx_connection_t *pc, ngx_nsec_t now,
+    ngx_nsec_t next_at, ngx_nsec_t max_ptif)
+{
+    ngx_msec_t  delay;
+
+    if (next_at <= now + max_ptif) {
+        return NGX_AGAIN;
+    }
+
+    if (pc->write->timer_set) {
+        ngx_del_timer(pc->write);
+    }
+
+    delay = ngx_max(1, (next_at - now - max_ptif) / NGX_NSEC_PER_MSEC);
+
+    ngx_add_timer(pc->write, delay);
+
+    return NGX_OK;
+}
+
+
 ngx_int_t
 ngx_quiche_output(ngx_connection_t *pc)
 {
     ssize_t                 written, sent;
+    ngx_nsec_t              next_at, now, max_ptif;
+    struct timespec         next_release;
     static u_char           out[NGX_QUIC_MAX_UDP_PAYLOAD_SIZE];
     quiche_send_info        send_info;
     ngx_quic_connection_t  *qc;
 
     qc = ngx_quic_get_connection(pc);
 
+    max_ptif = quiche_conn_max_release_into_future_as_nanos(qc->connection);
+
     while (1) {
+        if (pc->listening->supports_release_time
+            && quiche_conn_next_release_time(qc->connection, &next_release))
+        {
+            next_at = ngx_timespec_to_nsec(&next_release);
+            now = ngx_monotonic_nsec();
+
+            if (ngx_quiche_schedule_output(pc, now, next_at, max_ptif)
+                == NGX_OK)
+            {
+                break;
+            }
+        }
+
         written = quiche_conn_send(qc->connection, out, sizeof(out),
                                    &send_info);
         if (written == QUICHE_ERR_DONE) {
@@ -1497,9 +1571,11 @@ ngx_quiche_output(ngx_connection_t *pc)
             return NGX_ERROR;
         }
 
+        next_at = ngx_timespec_to_nsec(&send_info.at);
+
         sent = ngx_quiche_send_datagram(pc, out, written,
                                         (struct sockaddr *) &send_info.to,
-                                        send_info.to_len, 0);
+                                        send_info.to_len, 0, next_at);
         if (sent == NGX_AGAIN) {
             pc->write->ready = 0;
 
