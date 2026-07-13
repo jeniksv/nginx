@@ -52,7 +52,8 @@ static void ngx_quic_revert_send(ngx_connection_t *c,
 static ngx_uint_t ngx_quic_allow_segmentation(ngx_connection_t *c);
 static ngx_int_t ngx_quic_create_segments(ngx_connection_t *c);
 static ssize_t ngx_quic_send_segments(ngx_connection_t *c, u_char *buf,
-    size_t len, struct sockaddr *sockaddr, socklen_t socklen, size_t segment);
+    size_t len, struct sockaddr *sockaddr, socklen_t socklen, size_t segment,
+    uint64_t txtime_ns);
 #endif
 static ssize_t ngx_quic_output_packet(ngx_connection_t *c,
     ngx_quic_send_ctx_t *ctx, u_char *data, size_t max, size_t min,
@@ -72,6 +73,14 @@ static ssize_t ngx_quiche_send_dgram(ngx_connection_t *pc, u_char *buf,
     uint64_t at);
 static ngx_int_t ngx_quiche_schedule_output(ngx_connection_t *pc,
     ngx_nsec_t now, ngx_nsec_t next_at, ngx_nsec_t max_ptif);
+
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+static void ngx_quiche_gso_reset(ngx_quiche_gso_batch_t *batch);
+static ngx_flag_t ngx_quiche_gso_batch_compatible(ngx_quiche_gso_batch_t *batch,
+    size_t len, quiche_send_info *send_info);
+static ngx_int_t ngx_quiche_gso_flush(ngx_connection_t *pc,
+    ngx_quiche_gso_batch_t *batch, u_char *buf);
+#endif /* NGX_HAVE_UDP_SEGMENT && NGX_HAVE_MSGHDR_MSG_CONTROL */
 #endif /* NGX_QUICHE */
 
 
@@ -399,7 +408,7 @@ ngx_quic_create_segments(ngx_connection_t *c)
 
         if (n == 0 || nseg == NGX_QUIC_MAX_SEGMENTS) {
             n = ngx_quic_send_segments(c, dst, p - dst, path->sockaddr,
-                                       path->socklen, segsize);
+                                       path->socklen, segsize, 0);
             if (n == NGX_ERROR) {
                 return NGX_ERROR;
             }
@@ -426,7 +435,8 @@ ngx_quic_create_segments(ngx_connection_t *c)
 
 static ssize_t
 ngx_quic_send_segments(ngx_connection_t *c, u_char *buf, size_t len,
-    struct sockaddr *sockaddr, socklen_t socklen, size_t segment)
+    struct sockaddr *sockaddr, socklen_t socklen, size_t segment,
+    uint64_t txtime_ns)
 {
     size_t           clen;
     ssize_t          n;
@@ -435,12 +445,14 @@ ngx_quic_send_segments(ngx_connection_t *c, u_char *buf, size_t len,
     struct msghdr    msg;
     struct cmsghdr  *cmsg;
 
-#if (NGX_HAVE_ADDRINFO_CMSG)
     char             msg_control[CMSG_SPACE(sizeof(uint16_t))
-                             + CMSG_SPACE(sizeof(ngx_addrinfo_t))];
-#else
-    char             msg_control[CMSG_SPACE(sizeof(uint16_t))];
+#if (NGX_HAVE_ADDRINFO_CMSG)
+                             + CMSG_SPACE(sizeof(ngx_addrinfo_t))
 #endif
+#if (NGX_HAVE_TXTIME)
+                             + CMSG_SPACE(sizeof(uint64_t))
+#endif
+                             ];
 
     ngx_memzero(&msg, sizeof(struct msghdr));
     ngx_memzero(msg_control, sizeof(msg_control));
@@ -472,6 +484,20 @@ ngx_quic_send_segments(ngx_connection_t *c, u_char *buf, size_t len,
     if (c->listening && c->listening->wildcard && c->local_sockaddr) {
         cmsg = CMSG_NXTHDR(&msg, cmsg);
         clen += ngx_set_srcaddr_cmsg(cmsg, c->local_sockaddr);
+    }
+#endif
+
+#if (NGX_HAVE_TXTIME)
+    if (c->listening && c->listening->supports_release_time
+        && txtime_ns > 0)
+    {
+        cmsg = CMSG_NXTHDR(&msg, cmsg);
+
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SO_TXTIME;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint64_t));
+        ngx_memcpy(CMSG_DATA(cmsg), &txtime_ns, sizeof(txtime_ns));
+        clen += CMSG_SPACE(sizeof(uint64_t));
     }
 #endif
 
@@ -1488,7 +1514,15 @@ ngx_quiche_send_dgram(ngx_connection_t *pc, u_char *buf, size_t len,
     log_error = pc->log_error;
     pc->log_error = NGX_ERROR_IGNORE_EMSGSIZE;
 
-    n = ngx_quic_send(pc, buf, len, sockaddr, socklen, at);
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+    if (segment) {
+        n = ngx_quic_send_segments(pc, buf, len, sockaddr, socklen,
+                                   segment, at);
+    } else
+#endif
+    {
+        n = ngx_quic_send(pc, buf, len, sockaddr, socklen, at);
+    }
 
     pc->log_error = log_error;
 
@@ -1530,6 +1564,85 @@ ngx_quiche_schedule_output(ngx_connection_t *pc, ngx_nsec_t now,
 }
 
 
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+
+static void
+ngx_quiche_gso_reset(ngx_quiche_gso_batch_t *batch)
+{
+    batch->len = 0;
+    batch->segment = 0;
+    batch->nsegments = 0;
+    batch->at = 0;
+    batch->to_len = 0;
+}
+
+
+static ngx_flag_t
+ngx_quiche_gso_batch_compatible(ngx_quiche_gso_batch_t *batch, size_t len,
+    quiche_send_info *send_info)
+{
+    if (batch->len == 0) {
+        return 1;
+    }
+
+    if (len != batch->segment) {
+        return 0;
+    }
+
+    if (batch->len + len > NGX_QUIC_MAX_UDP_SEGMENT_BUF) {
+        return 0;
+    }
+
+    if (batch->nsegments == NGX_QUIC_MAX_SEGMENTS) {
+        return 0;
+    }
+
+    if (ngx_cmp_sockaddr((struct sockaddr *) &send_info->to, send_info->to_len,
+                         (struct sockaddr *) &batch->to, batch->to_len, 1)
+        != NGX_OK)
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+
+static ngx_int_t
+ngx_quiche_gso_flush(ngx_connection_t *pc, ngx_quiche_gso_batch_t *batch,
+    u_char *buf)
+{
+    ssize_t  sent;
+
+    if (batch->len == 0) {
+        return NGX_OK;
+    }
+
+    sent = ngx_quiche_send_dgram(pc, buf, batch->len,
+                                 (struct sockaddr *) &batch->to,
+                                 batch->to_len, batch->segment, batch->at);
+    if (sent == NGX_AGAIN) {
+        pc->write->ready = 0;
+
+        if (ngx_handle_write_event(pc->write, 0) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+        return NGX_AGAIN;
+    }
+
+    if (sent == NGX_ERROR) {
+        return NGX_ERROR;
+    }
+
+    ngx_quiche_gso_reset(batch);
+
+    return NGX_OK;
+}
+
+#endif
+
+
 ngx_int_t
 ngx_quiche_output(ngx_connection_t *pc)
 {
@@ -1540,11 +1653,36 @@ ngx_quiche_output(ngx_connection_t *pc)
     quiche_send_info        send_info;
     ngx_quic_connection_t  *qc;
 
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+    size_t                  burst_bytes;
+    ngx_int_t               rc;
+    static u_char           gso_buf[NGX_QUIC_MAX_UDP_SEGMENT_BUF];
+    ngx_quiche_gso_batch_t  gso;
+#endif
+
     qc = ngx_quic_get_connection(pc);
 
     max_ptif = quiche_conn_max_release_into_future_as_nanos(qc->connection);
 
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+    burst_bytes = 0;
+    ngx_quiche_gso_reset(&gso);
+#endif
+
     while (1) {
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+        if (qc->conf->gso_enabled) {
+            if (burst_bytes >= quiche_conn_send_quantum(qc->connection)) {
+                rc = ngx_quiche_gso_flush(pc, &gso, gso_buf);
+                if (rc != NGX_OK) {
+                    return rc;
+                }
+
+                burst_bytes = 0;
+            }
+        }
+#endif
+
         if (pc->listening->supports_release_time
             && quiche_conn_next_release_time(qc->connection, &next_release))
         {
@@ -1565,6 +1703,15 @@ ngx_quiche_output(ngx_connection_t *pc)
         }
 
         if (written < 0) {
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+            if (gso.len > 0) {
+                (void) ngx_quiche_send_dgram(pc, gso_buf, gso.len,
+                                             (struct sockaddr *) &gso.to,
+                                             gso.to_len, gso.segment, gso.at);
+                ngx_quiche_gso_reset(&gso);
+            }
+#endif
+
             ngx_log_error(NGX_LOG_INFO, pc->log, 0,
                           "quiche send failed with: %d", written);
 
@@ -1573,23 +1720,87 @@ ngx_quiche_output(ngx_connection_t *pc)
 
         next_at = ngx_timespec_to_nsec(&send_info.at);
 
-        sent = ngx_quiche_send_dgram(pc, out, written,
-                                     (struct sockaddr *) &send_info.to,
-                                     send_info.to_len, 0, next_at);
-        if (sent == NGX_AGAIN) {
-            pc->write->ready = 0;
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+        if (qc->conf->gso_enabled) {
+            if (!ngx_quiche_gso_batch_compatible(&gso, (size_t) written,
+                                                 &send_info))
+            {
+                rc = ngx_quiche_gso_flush(pc, &gso, gso_buf);
+                if (rc != NGX_OK) {
+                    return rc;
+                }
+            }
 
-            if (ngx_handle_write_event(pc->write, 0) != NGX_OK) {
+            if ((size_t) written > sizeof(gso_buf)) {
+                /* packet does not fit the GSO buffer, send it on its own */
+
+                sent = ngx_quiche_send_dgram(pc, out, written,
+                                             (struct sockaddr *) &send_info.to,
+                                             send_info.to_len, 0, next_at);
+                if (sent == NGX_AGAIN) {
+                    pc->write->ready = 0;
+
+                    if (ngx_handle_write_event(pc->write, 0) != NGX_OK) {
+                        return NGX_ERROR;
+                    }
+
+                    return NGX_AGAIN;
+                }
+
+                if (sent != written) {
+                    return NGX_ERROR;
+                }
+
+                burst_bytes += sent;
+
+            } else {
+
+                if (gso.len == 0) {
+                    gso.segment = (size_t) written;
+                    gso.at = next_at;
+                    gso.to = send_info.to;
+                    gso.to_len = send_info.to_len;
+                }
+
+                ngx_memcpy(gso_buf + gso.len, out, written);
+                gso.len += written;
+                gso.nsegments++;
+                burst_bytes += written;
+            }
+
+        } else {
+#endif /* NGX_HAVE_UDP_SEGMENT */
+
+            sent = ngx_quiche_send_dgram(pc, out, written,
+                                         (struct sockaddr *) &send_info.to,
+                                         send_info.to_len, 0, next_at);
+            if (sent == NGX_AGAIN) {
+                pc->write->ready = 0;
+
+                if (ngx_handle_write_event(pc->write, 0) != NGX_OK) {
+                    return NGX_ERROR;
+                }
+
+                return NGX_AGAIN;
+            }
+
+            if (sent != written) {
                 return NGX_ERROR;
             }
 
-            return NGX_AGAIN;
-        }
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+            burst_bytes += sent;
 
-        if (sent != written) {
-            return NGX_ERROR;
-        }
+        } /* gso_enabled else */
+#endif
     }
+
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+    rc = ngx_quiche_gso_flush(pc, &gso, gso_buf);
+    if (rc != NGX_OK) {
+        return rc;
+    }
+#endif
 
     return NGX_OK;
 }
