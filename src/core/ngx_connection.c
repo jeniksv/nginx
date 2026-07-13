@@ -9,6 +9,10 @@
 #include <ngx_core.h>
 #include <ngx_event.h>
 
+#if (NGX_HAVE_TXTIME)
+#include <linux/net_tstamp.h>
+#endif
+
 
 ngx_os_io_t  ngx_io;
 
@@ -1116,6 +1120,30 @@ ngx_configure_listening_sockets(ngx_cycle_t *cycle)
         }
 
 #endif
+
+#endif
+
+#if (NGX_HAVE_TXTIME)
+
+        if (ls[i].quic) {
+            struct sock_txtime txtime_cfg = {
+                .clockid = CLOCK_MONOTONIC,
+                .flags = 0
+            };
+
+            ls[i].supports_release_time = 1;
+
+            if (setsockopt(ls[i].fd, SOL_SOCKET, SO_TXTIME,
+                           &txtime_cfg, sizeof(txtime_cfg))
+                == -1)
+            {
+                ngx_log_error(NGX_LOG_ERR, cycle->log, ngx_socket_errno,
+                              "setsockopt(SO_TXTIME) for %V failed, ignored",
+                              &ls[i].addr_text);
+
+                ls[i].supports_release_time = 0;
+            }
+        }
 
 #endif
     }
