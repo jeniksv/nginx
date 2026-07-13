@@ -76,6 +76,7 @@ struct ngx_listening_s {
     unsigned            reuseport:1;
     unsigned            add_reuseport:1;
     unsigned            keepalive:2;
+    unsigned            supports_release_time:1;
 
     unsigned            change_protocol:1;
 
