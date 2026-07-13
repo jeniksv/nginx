@@ -322,6 +322,16 @@ ngx_feature_test="setsockopt(0, SOL_SOCKET, SO_ACCEPTFILTER, NULL, 0)"
 . auto/feature
 
 
+ngx_feature="SO_TXTIME"
+ngx_feature_name="NGX_HAVE_TXTIME"
+ngx_feature_run=no
+ngx_feature_incs="#include <sys/socket.h>"
+ngx_feature_path=
+ngx_feature_libs=
+ngx_feature_test="setsockopt(0, SOL_SOCKET, SO_TXTIME, NULL, 0)"
+. auto/feature
+
+
 # OpenBSD bind to any address for transparent proxying
 
 ngx_feature="SO_BINDANY"
