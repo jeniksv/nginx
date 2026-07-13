@@ -30,6 +30,17 @@ ngx_int_t ngx_quic_send_new_token(ngx_connection_t *c, ngx_quic_path_t *path);
 #if (NGX_QUICHE)
 ngx_int_t ngx_quiche_output(ngx_connection_t *pc);
 ngx_int_t ngx_quiche_send_new_token(ngx_connection_t *c);
+
+#if (NGX_HAVE_UDP_SEGMENT) && (NGX_HAVE_MSGHDR_MSG_CONTROL)
+typedef struct {
+    size_t                   len;
+    size_t                   segment;
+    ngx_uint_t               nsegments;
+    ngx_nsec_t               at;
+    socklen_t                to_len;
+    struct sockaddr_storage  to;
+} ngx_quiche_gso_batch_t;
+#endif /* NGX_HAVE_UDP_SEGMENT && NGX_HAVE_MSGHDR_MSG_CONTROL */
 #endif /* NGX_QUICHE */
 
 ngx_int_t ngx_quic_send_ack(ngx_connection_t *c,
