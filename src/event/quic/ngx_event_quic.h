@@ -119,6 +119,10 @@ typedef struct {
     ngx_flag_t                     pmtud;
     ngx_uint_t                     pmtud_pkts_between_probes;
 
+    ngx_flag_t                     qlog_enabled;
+    ngx_str_t                      qlog_path;
+    ngx_uint_t                     qlog_sample_n;
+
     size_t                         max_recv_udp_payload_size;
     size_t                         max_send_udp_payload_size;
 
