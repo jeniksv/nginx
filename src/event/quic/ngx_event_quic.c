@@ -50,6 +50,8 @@ static void ngx_quiche_input_handler(ngx_event_t *rev);
 static void ngx_quiche_push_handler(ngx_event_t *wev);
 
 static void ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc);
+
+static ngx_int_t ngx_quiche_qlog_init(ngx_quic_connection_t *qc);
 #endif
 
 
@@ -1659,6 +1661,51 @@ ngx_quic_address_hash(struct sockaddr *sockaddr, socklen_t socklen,
 
 #if (NGX_QUICHE)
 
+static ngx_int_t
+ngx_quiche_qlog_init(ngx_quic_connection_t *qc)
+{
+    char            qlog_path[NGX_MAX_PATH];
+    u_char         *p;
+    const uint8_t  *trace_id;
+    size_t          trace_id_len;
+
+    if (!qc->conf->qlog_enabled) {
+        return NGX_DECLINED;
+    }
+
+    if ((ngx_uint_t) ngx_random() % qc->conf->qlog_sample_n != 0) {
+        return NGX_DECLINED;
+    }
+
+    if (qc->conf->qlog_path.len == 0) {
+        return NGX_DECLINED;
+    }
+
+    quiche_conn_trace_id(qc->connection, &trace_id, &trace_id_len);
+
+    if (qc->conf->qlog_path.len + 1 + trace_id_len + sizeof(".sqlog")
+        > NGX_MAX_PATH)
+    {
+        return NGX_ERROR;
+    }
+
+    p = ngx_cpymem(qlog_path, qc->conf->qlog_path.data,
+                   qc->conf->qlog_path.len);
+
+    if (!ngx_path_separator(*(p - 1))) {
+        *p++ = '/';
+    }
+
+    p = ngx_cpymem(p, trace_id, trace_id_len);
+    p = ngx_cpymem(p, ".sqlog", sizeof(".sqlog") - 1);
+    *p = '\0';
+
+    quiche_conn_set_qlog_path(qc->connection,
+                              (const char *) qlog_path, "", "");
+
+    return NGX_OK;
+}
+
 static void
 ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
 {
@@ -1680,6 +1727,11 @@ ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
 
         quiche_conn_set_keylog_path(qc->connection,
                                     (const char *) keylog_path);
+    }
+
+    if (ngx_quiche_qlog_init(qc) == NGX_ERROR) {
+        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quiche qlog init failed, continuing without qlog");
     }
 
     /*

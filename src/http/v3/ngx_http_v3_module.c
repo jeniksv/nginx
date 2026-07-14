@@ -22,6 +22,10 @@ static char *ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent,
 static char *ngx_http_quic_host_key(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 #if (NGX_QUICHE)
+static ngx_conf_num_bounds_t  ngx_http_v3_qlog_sample_bounds = {
+    ngx_conf_check_num_bounds, 1, NGX_MAX_INT_T_VALUE
+};
+
 static ngx_conf_enum_t  ngx_http_v3_quic_congestion_control[] = {
     { ngx_string("reno"), QUICHE_CC_RENO },
     { ngx_string("cubic"), QUICHE_CC_CUBIC },
@@ -131,6 +135,27 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_v3_srv_conf_t, quic.send_capacity_factor),
       NULL },
+
+    { ngx_string("quic_qlog"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_enabled),
+      NULL },
+
+    { ngx_string("quic_qlog_path"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_path),
+      NULL },
+
+    { ngx_string("quic_qlog_sample_rate"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_sample_n),
+      &ngx_http_v3_qlog_sample_bounds },
 
     { ngx_string("quic_congestion_control"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
@@ -294,6 +319,9 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
 
     h3scf->quic.send_capacity_factor = NGX_CONF_UNSET_UINT;
 
+    h3scf->quic.qlog_enabled = NGX_CONF_UNSET;
+    h3scf->quic.qlog_sample_n = NGX_CONF_UNSET_UINT;
+
     h3scf->quic.congestion_control = NGX_CONF_UNSET_UINT;
     h3scf->quic.congestion_control_pacing = NGX_CONF_UNSET;
 #endif
@@ -356,6 +384,21 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
                               1452);
     ngx_conf_merge_uint_value(conf->quic.send_capacity_factor,
                               prev->quic.send_capacity_factor, 1);
+    ngx_conf_merge_value(conf->quic.qlog_enabled,
+                         prev->quic.qlog_enabled, 0);
+    ngx_conf_merge_str_value(conf->quic.qlog_path,
+                             prev->quic.qlog_path, "");
+    ngx_conf_merge_uint_value(conf->quic.qlog_sample_n,
+                              prev->quic.qlog_sample_n, 1);
+
+    if (conf->quic.qlog_path.len) {
+        if (ngx_conf_full_name(cf->cycle, &conf->quic.qlog_path, 0)
+            != NGX_OK)
+        {
+            return NGX_CONF_ERROR;
+        }
+    }
+
     ngx_conf_merge_uint_value(conf->quic.congestion_control,
                               prev->quic.congestion_control,
                               QUICHE_CC_CUBIC);
