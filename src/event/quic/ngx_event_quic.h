@@ -120,6 +120,9 @@ typedef struct {
 
     size_t                         max_recv_udp_payload_size;
     size_t                         max_send_udp_payload_size;
+
+    ngx_uint_t                     congestion_control;
+    ngx_flag_t                     congestion_control_pacing;
 #endif
 } ngx_quic_conf_t;
 
