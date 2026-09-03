@@ -21,6 +21,14 @@ static char *ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent,
     void *child);
 static char *ngx_http_quic_host_key(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
+#if (NGX_QUICHE)
+static ngx_conf_enum_t  ngx_http_v3_quic_congestion_control[] = {
+    { ngx_string("reno"), QUICHE_CC_RENO },
+    { ngx_string("cubic"), QUICHE_CC_CUBIC },
+    { ngx_string("bbr2"), QUICHE_CC_BBR2_GCONGESTION },
+    { ngx_null_string, 0 }
+};
+#endif
 
 
 static ngx_command_t  ngx_http_v3_commands[] = {
@@ -122,6 +130,20 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       ngx_conf_set_num_slot,
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_v3_srv_conf_t, quic.send_capacity_factor),
+      NULL },
+
+    { ngx_string("quic_congestion_control"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_enum_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.congestion_control),
+      &ngx_http_v3_quic_congestion_control },
+
+    { ngx_string("quic_congestion_control_pacing"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.congestion_control_pacing),
       NULL },
 #endif
 
@@ -271,6 +293,9 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.max_send_udp_payload_size = NGX_CONF_UNSET_SIZE;
 
     h3scf->quic.send_capacity_factor = NGX_CONF_UNSET_UINT;
+
+    h3scf->quic.congestion_control = NGX_CONF_UNSET_UINT;
+    h3scf->quic.congestion_control_pacing = NGX_CONF_UNSET;
 #endif
 
     h3scf->quic.init = ngx_http_v3_init;
@@ -331,6 +356,11 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
                               1452);
     ngx_conf_merge_uint_value(conf->quic.send_capacity_factor,
                               prev->quic.send_capacity_factor, 1);
+    ngx_conf_merge_uint_value(conf->quic.congestion_control,
+                              prev->quic.congestion_control,
+                              QUICHE_CC_CUBIC);
+    ngx_conf_merge_value(conf->quic.congestion_control_pacing,
+                         prev->quic.congestion_control_pacing, 1);
 #endif
 
     if (conf->quic.host_key.len == 0) {
