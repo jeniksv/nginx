@@ -2113,6 +2113,9 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
                                    (uint8_t *) QUICHE_H3_APPLICATION_PROTOCOL,
                                    sizeof(QUICHE_H3_APPLICATION_PROTOCOL) - 1);
 
+    quiche_config_set_cc_algorithm(config, qcf->congestion_control);
+    quiche_config_enable_pacing(config, qcf->congestion_control_pacing);
+
     qcf->config = config;
 
     return NGX_OK;
