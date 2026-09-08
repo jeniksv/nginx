@@ -69,13 +69,14 @@ typedef struct {
     socklen_t                  socklen;
     ngx_str_t                  addr_text;
 
+    const ngx_quic_backend_t  *quic;
+
     unsigned                   set:1;
     unsigned                   default_server:1;
     unsigned                   bind:1;
     unsigned                   wildcard:1;
     unsigned                   ssl:1;
     unsigned                   http2:1;
-    unsigned                   quic:1;
 #if (NGX_HAVE_INET6)
     unsigned                   ipv6only:1;
 #endif
@@ -243,9 +244,10 @@ struct ngx_http_addr_conf_s {
 
     ngx_http_virtual_names_t  *virtual_names;
 
+    const ngx_quic_backend_t  *quic;
+
     unsigned                   ssl:1;
     unsigned                   http2:1;
-    unsigned                   quic:1;
     unsigned                   proxy_protocol:1;
 };
 

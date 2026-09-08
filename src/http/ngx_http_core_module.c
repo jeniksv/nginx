@@ -4348,9 +4348,27 @@ ngx_http_core_listen(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 #endif
         }
 
-        if (ngx_strcmp(value[n].data, "quic") == 0) {
+        if (ngx_strncmp(value[n].data, "quic", 4) == 0
+            && (value[n].len == 4 || value[n].data[4] == '='))
+        {
 #if (NGX_HTTP_V3)
-            lsopt.quic = 1;
+            ngx_str_t  name;
+
+            if (value[n].len == 4) {
+                ngx_str_set(&name, "nginx");
+
+            } else {
+                name.data = &value[n].data[5];
+                name.len = value[n].len - 5;
+            }
+
+            lsopt.quic = ngx_quic_find_backend(cf->cycle, &name);
+            if (lsopt.quic == NULL) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "unknown quic backend \"%V\"", &name);
+                return NGX_CONF_ERROR;
+            }
+
             lsopt.type = SOCK_DGRAM;
             continue;
 #else
