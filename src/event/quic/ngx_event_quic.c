@@ -17,6 +17,9 @@ static ngx_int_t ngx_quic_handle_stateless_reset(ngx_connection_t *c,
     ngx_quic_header_t *pkt);
 static void ngx_quic_input_handler(ngx_event_t *rev);
 static void ngx_quic_close_handler(ngx_event_t *ev);
+static void ngx_quic_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf);
+static ngx_int_t ngx_quic_connection_setup(ngx_connection_t *c,
+    ngx_quic_connection_t *qc, ngx_quic_header_t *pkt);
 
 static ngx_int_t ngx_quic_handle_datagram(ngx_connection_t *c, ngx_buf_t *b,
     ngx_quic_conf_t *conf);
@@ -53,6 +56,60 @@ ngx_module_t  ngx_quic_module = {
     NULL,                                  /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+
+static const ngx_quic_backend_t  ngx_quic_backend_nginx = {
+    ngx_quic_do_run,                       /* run */
+    ngx_quic_stream_init,                  /* stream_init */
+    ngx_quic_connection_setup,             /* connection_setup */
+    ngx_quic_close_connection              /* connection_close */
+};
+
+
+static ngx_quic_module_t  ngx_quic_nginx_module_ctx = {
+    ngx_string("nginx"),
+    &ngx_quic_backend_nginx
+};
+
+
+ngx_module_t  ngx_quic_nginx_module = {
+    NGX_MODULE_V1,
+    &ngx_quic_nginx_module_ctx,            /* module context */
+    NULL,                                  /* module directives */
+    NGX_QUIC_MODULE,                       /* module type */
+    NULL,                                  /* init master */
+    NULL,                                  /* init module */
+    NULL,                                  /* init process */
+    NULL,                                  /* init thread */
+    NULL,                                  /* exit thread */
+    NULL,                                  /* exit process */
+    NULL,                                  /* exit master */
+    NGX_MODULE_V1_PADDING
+};
+
+
+const ngx_quic_backend_t *
+ngx_quic_find_backend(ngx_cycle_t *cycle, ngx_str_t *name)
+{
+    ngx_uint_t          i;
+    ngx_quic_module_t  *m;
+
+    for (i = 0; cycle->modules[i]; i++) {
+        if (cycle->modules[i]->type != NGX_QUIC_MODULE) {
+            continue;
+        }
+
+        m = cycle->modules[i]->ctx;
+
+        if (m->name.len == name->len
+            && ngx_strncmp(m->name.data, name->data, name->len) == 0)
+        {
+            return m->backend;
+        }
+    }
+
+    return NULL;
+}
 
 
 #if (NGX_DEBUG)
@@ -200,6 +257,13 @@ ngx_quic_apply_transport_params(ngx_connection_t *c, ngx_quic_tp_t *ctp)
 void
 ngx_quic_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
 {
+    c->listening->quic->run(c, conf);
+}
+
+
+static void
+ngx_quic_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
+{
     ngx_int_t               rc;
     ngx_quic_connection_t  *qc;
 
@@ -228,28 +292,20 @@ ngx_quic_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
 }
 
 
-static ngx_quic_connection_t *
-ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
+static ngx_int_t
+ngx_quic_connection_setup(ngx_connection_t *c, ngx_quic_connection_t *qc,
     ngx_quic_header_t *pkt)
 {
-    ngx_uint_t              i;
-    ngx_quic_tp_t          *ctp;
-    ngx_quic_connection_t  *qc;
+    ngx_uint_t        i;
+    ngx_quic_tp_t    *ctp;
+    ngx_quic_conf_t  *conf;
 
-    qc = ngx_pcalloc(c->pool, sizeof(ngx_quic_connection_t));
-    if (qc == NULL) {
-        return NULL;
-    }
+    conf = qc->conf;
 
     qc->keys = ngx_pcalloc(c->pool, sizeof(ngx_quic_keys_t));
     if (qc->keys == NULL) {
-        return NULL;
+        return NGX_ERROR;
     }
-
-    qc->version = pkt->version;
-
-    ngx_rbtree_init(&qc->streams.tree, &qc->streams.sentinel,
-                    ngx_quic_rbtree_insert_stream);
 
     for (i = 0; i < NGX_QUIC_SEND_CTX_LAST; i++) {
         ngx_queue_init(&qc->send_ctx[i].frames);
@@ -289,10 +345,8 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     qc->key_update.data = c;
     qc->key_update.handler = ngx_quic_keys_update;
 
-    qc->conf = conf;
-
     if (ngx_quic_init_transport_params(&qc->tp, conf) != NGX_OK) {
-        return NULL;
+        return NGX_ERROR;
     }
 
     ctp = &qc->ctp;
@@ -302,9 +356,6 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     ctp->ack_delay_exponent = NGX_QUIC_DEFAULT_ACK_DELAY_EXPONENT;
     ctp->max_ack_delay = NGX_QUIC_DEFAULT_MAX_ACK_DELAY;
     ctp->active_connection_id_limit = 2;
-
-    ngx_queue_init(&qc->streams.uninitialized);
-    ngx_queue_init(&qc->streams.free);
 
     qc->streams.recv_max_data = qc->tp.initial_max_data;
     qc->streams.recv_window = qc->streams.recv_max_data;
@@ -327,20 +378,52 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
         qc->tp.retry_scid.len = pkt->dcid.len;
         qc->tp.retry_scid.data = ngx_pstrdup(c->pool, &pkt->dcid);
         if (qc->tp.retry_scid.data == NULL) {
-            return NULL;
+            return NGX_ERROR;
         }
     }
 
     if (ngx_quic_keys_set_initial_secret(qc->keys, &pkt->dcid, c->log)
         != NGX_OK)
     {
-        return NULL;
+        return NGX_ERROR;
     }
 
     qc->validated = pkt->validated;
 
     if (ngx_quic_open_sockets(c, qc, pkt) != NGX_OK) {
         ngx_quic_keys_cleanup(qc->keys);
+        return NGX_ERROR;
+    }
+
+    qc->max_server_ids = ngx_quic_max_server_ids;
+    qc->send_server_id = ngx_quic_send_server_id;
+    qc->server_streams_left = ngx_quic_server_streams_left;
+
+    return NGX_OK;
+}
+
+
+static ngx_quic_connection_t *
+ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
+    ngx_quic_header_t *pkt)
+{
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_pcalloc(c->pool, sizeof(ngx_quic_connection_t));
+    if (qc == NULL) {
+        return NULL;
+    }
+
+    qc->version = pkt->version;
+    qc->conf = conf;
+
+    ngx_rbtree_init(&qc->streams.tree, &qc->streams.sentinel,
+                    ngx_quic_rbtree_insert_stream);
+
+    ngx_queue_init(&qc->streams.uninitialized);
+    ngx_queue_init(&qc->streams.free);
+
+    if (c->listening->quic->connection_setup(c, qc, pkt) != NGX_OK) {
         return NULL;
     }
 

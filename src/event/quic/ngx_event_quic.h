@@ -11,6 +11,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
+#define NGX_QUIC_MODULE                      0x43495551   /* "QUIC" */
 
 #if (OPENSSL_VERSION_NUMBER >= 0x30500010L)
 #define NGX_QUIC_OPENSSL_API                 1
@@ -46,6 +47,11 @@
 
 typedef ngx_int_t (*ngx_quic_init_pt)(ngx_connection_t *c);
 typedef void (*ngx_quic_shutdown_pt)(ngx_connection_t *c);
+
+typedef ngx_int_t (*ngx_quic_stream_reset_pt)(ngx_quic_stream_t *qs,
+    ngx_uint_t err);
+typedef ngx_int_t (*ngx_quic_stream_close_pt)(ngx_quic_stream_t *qs);
+typedef ngx_int_t (*ngx_quic_stream_shutdown_pt)(ngx_connection_t *c);
 
 
 typedef enum {
@@ -107,6 +113,10 @@ struct ngx_quic_stream_s {
     ngx_queue_t                    queue;
     ngx_connection_t              *parent;
     ngx_connection_t              *connection;
+    ngx_quic_stream_close_pt       close;
+    ngx_quic_stream_reset_pt       reset;
+    ngx_quic_stream_shutdown_pt    shutdown_send;
+    ngx_quic_stream_shutdown_pt    shutdown_recv;
     uint64_t                       id;
     uint64_t                       sent;
     uint64_t                       acked;
@@ -127,8 +137,18 @@ struct ngx_quic_stream_s {
 };
 
 
+typedef struct {
+    ngx_str_t                  name;
+    const ngx_quic_backend_t  *backend;
+} ngx_quic_module_t;
+
+
+const ngx_quic_backend_t *ngx_quic_find_backend(ngx_cycle_t *cycle,
+    ngx_str_t *name);
+
 void ngx_quic_recvmsg(ngx_event_t *ev);
 void ngx_quic_run(ngx_connection_t *c, ngx_quic_conf_t *conf);
+void ngx_quic_stream_init(ngx_quic_stream_t *qs);
 ngx_connection_t *ngx_quic_open_stream(ngx_connection_t *c, ngx_uint_t bidi);
 void ngx_quic_finalize_connection(ngx_connection_t *c, ngx_uint_t err,
     const char *reason);
