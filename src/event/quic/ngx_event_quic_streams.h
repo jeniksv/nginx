@@ -40,5 +40,7 @@ ngx_quic_stream_t *ngx_quic_find_stream(ngx_rbtree_t *rbtree,
     uint64_t id);
 ngx_int_t ngx_quic_close_streams(ngx_connection_t *c,
     ngx_quic_connection_t *qc);
+ngx_uint_t ngx_quic_server_streams_left(ngx_connection_t *c,
+    ngx_uint_t bidi);
 
 #endif /* _NGX_EVENT_QUIC_STREAMS_H_INCLUDED_ */

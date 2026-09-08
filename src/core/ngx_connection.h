@@ -38,6 +38,8 @@ struct ngx_listening_s {
     /* handler of accepted connection */
     ngx_connection_handler_pt   handler;
 
+    const ngx_quic_backend_t  *quic;
+
     void               *servers;  /* array of ngx_http_in_addr_t, for example */
 
     ngx_log_t           log;
@@ -74,7 +76,6 @@ struct ngx_listening_s {
     unsigned            reuseport:1;
     unsigned            add_reuseport:1;
     unsigned            keepalive:2;
-    unsigned            quic:1;
 
     unsigned            change_protocol:1;
 

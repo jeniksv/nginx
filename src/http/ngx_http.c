@@ -1301,7 +1301,7 @@ ngx_http_add_addresses(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
     ngx_uint_t             http2;
 #endif
 #if (NGX_HTTP_V3)
-    ngx_uint_t             quic;
+    const ngx_quic_backend_t  *quic;
 #endif
 
     /*
@@ -1345,7 +1345,16 @@ ngx_http_add_addresses(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
         protocols_prev |= addr[i].opt.http2 << 2;
 #endif
 #if (NGX_HTTP_V3)
-        quic = lsopt->quic || addr[i].opt.quic;
+        if ((lsopt->quic && addr[i].opt.quic)
+            && (lsopt->quic != addr[i].opt.quic))
+        {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "conflicting \"quic\" parameter for %V",
+                               &addr[i].opt.addr_text);
+            return NGX_ERROR;
+        }
+
+        quic = lsopt->quic ? lsopt->quic : addr[i].opt.quic;
 #endif
 
         if (lsopt->set) {
@@ -1817,6 +1826,26 @@ ngx_http_init_listening(ngx_conf_t *cf, ngx_http_conf_port_t *port)
     } else {
         bind_wildcard = 0;
     }
+
+#if (NGX_HTTP_V3)
+
+    if (bind_wildcard) {
+        for (i = 0; i < last - 1; i++) {
+
+            if (!addr[i].opt.bind
+                && addr[i].opt.quic != addr[last - 1].opt.quic)
+            {
+                ngx_log_error(NGX_LOG_EMERG, cf->log, 0,
+                              "conflicting \"quic\" parameter for %V and %V, "
+                              "use the \"bind\" parameter",
+                              &addr[i].opt.addr_text,
+                              &addr[last - 1].opt.addr_text);
+                return NGX_ERROR;
+            }
+        }
+    }
+
+#endif
 
     i = 0;
 
