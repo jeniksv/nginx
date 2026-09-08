@@ -1301,7 +1301,7 @@ ngx_http_add_addresses(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
     ngx_uint_t             http2;
 #endif
 #if (NGX_HTTP_V3)
-    ngx_uint_t             quic;
+    const ngx_quic_backend_t  *quic;
 #endif
 
     /*
@@ -1345,7 +1345,7 @@ ngx_http_add_addresses(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
         protocols_prev |= addr[i].opt.http2 << 2;
 #endif
 #if (NGX_HTTP_V3)
-        quic = lsopt->quic || addr[i].opt.quic;
+        quic = lsopt->quic ? lsopt->quic : addr[i].opt.quic;
 #endif
 
         if (lsopt->set) {

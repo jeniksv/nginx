@@ -34,6 +34,13 @@ typedef struct ngx_quic_socket_s      ngx_quic_socket_t;
 typedef struct ngx_quic_path_s        ngx_quic_path_t;
 typedef struct ngx_quic_keys_s        ngx_quic_keys_t;
 
+
+typedef ngx_uint_t (*ngx_quic_max_server_ids_pt)(ngx_connection_t *c);
+typedef ngx_int_t (*ngx_quic_send_server_id_pt)(ngx_connection_t *c,
+    ngx_quic_socket_t *qsock);
+typedef ngx_uint_t (*ngx_quic_server_streams_left_pt)(ngx_connection_t *c,
+    ngx_uint_t bidi);
+
 #if (NGX_QUIC_OPENSSL_COMPAT)
 #include <ngx_event_quic_openssl_compat.h>
 #endif
@@ -221,6 +228,10 @@ struct ngx_quic_send_ctx_s {
 
 struct ngx_quic_connection_s {
     uint32_t                          version;
+
+    ngx_quic_max_server_ids_pt        max_server_ids;
+    ngx_quic_send_server_id_pt        send_server_id;
+    ngx_quic_server_streams_left_pt   server_streams_left;
 
     ngx_quic_path_t                  *path;
 

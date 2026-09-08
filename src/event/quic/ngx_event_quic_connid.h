@@ -18,6 +18,9 @@ ngx_int_t ngx_quic_handle_new_connection_id_frame(ngx_connection_t *c,
     ngx_quic_new_conn_id_frame_t *f);
 
 ngx_int_t ngx_quic_create_sockets(ngx_connection_t *c);
+ngx_uint_t ngx_quic_max_server_ids(ngx_connection_t *c);
+ngx_int_t ngx_quic_send_server_id(ngx_connection_t *c,
+    ngx_quic_socket_t *qsock);
 ngx_int_t ngx_quic_create_server_id(ngx_connection_t *c, u_char *id);
 
 ngx_quic_client_id_t *ngx_quic_create_client_id(ngx_connection_t *c,
