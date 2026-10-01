@@ -119,6 +119,9 @@ typedef struct {
     ngx_flag_t                     pmtud;
     ngx_uint_t                     pmtud_pkts_between_probes;
 
+    ngx_flag_t                     keylog_enabled;
+    ngx_str_t                      keylog_path;
+
     ngx_flag_t                     qlog_enabled;
     ngx_str_t                      qlog_path;
     ngx_uint_t                     qlog_sample_n;
