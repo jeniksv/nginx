@@ -52,6 +52,7 @@ static void ngx_quiche_push_handler(ngx_event_t *wev);
 static void ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc);
 
 static ngx_int_t ngx_quiche_qlog_init(ngx_quic_connection_t *qc);
+static ngx_int_t ngx_quiche_keylog_init(ngx_quic_connection_t *qc);
 #endif
 
 
@@ -1706,6 +1707,50 @@ ngx_quiche_qlog_init(ngx_quic_connection_t *qc)
     return NGX_OK;
 }
 
+
+static ngx_int_t
+ngx_quiche_keylog_init(ngx_quic_connection_t *qc)
+{
+    char            keylog_path[NGX_MAX_PATH];
+    u_char         *p;
+    const uint8_t  *trace_id;
+    size_t          trace_id_len;
+
+    if (!qc->conf->keylog_enabled) {
+        return NGX_DECLINED;
+    }
+
+    if (qc->conf->keylog_path.len == 0) {
+        return NGX_DECLINED;
+    }
+
+    quiche_conn_trace_id(qc->connection, &trace_id, &trace_id_len);
+
+    if (qc->conf->keylog_path.len + 1 + trace_id_len + sizeof(".key")
+        > NGX_MAX_PATH)
+    {
+        return NGX_ERROR;
+    }
+
+    p = ngx_cpymem(keylog_path, qc->conf->keylog_path.data,
+                   qc->conf->keylog_path.len);
+
+    if (!ngx_path_separator(*(p - 1))) {
+        *p++ = '/';
+    }
+
+    p = ngx_cpymem(p, trace_id, trace_id_len);
+    p = ngx_cpymem(p, ".key", sizeof(".key") - 1);
+    *p = '\0';
+
+    quiche_conn_set_keylog_path(qc->connection,
+                                (const char *) keylog_path);
+
+    return NGX_OK;
+}
+
+
+
 static void
 ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
 {
@@ -1719,6 +1764,11 @@ ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
     }
 
     qc = ngx_quic_get_connection(c);
+
+    if (ngx_quiche_keylog_init(qc) == NGX_ERROR) {
+        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quiche keylog init failed, continuing without keylog");
+    }
 
     if (ngx_quiche_qlog_init(qc) == NGX_ERROR) {
         ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
@@ -2232,6 +2282,10 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
 
     quiche_config_set_cc_algorithm(config, qcf->congestion_control);
     quiche_config_enable_pacing(config, qcf->congestion_control_pacing);
+
+    if (qcf->keylog_enabled) {
+        quiche_config_log_keys(config);
+    }
 
     qcf->config = config;
 

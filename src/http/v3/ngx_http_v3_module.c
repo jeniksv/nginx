@@ -94,6 +94,20 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       NULL },
 
 #if (NGX_QUICHE)
+    { ngx_string("quic_keylog"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.keylog_enabled),
+      NULL },
+
+    { ngx_string("quic_keylog_path"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.keylog_path),
+      NULL },
+
     { ngx_string("quic_discover_pmtu"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
       ngx_conf_set_flag_slot,
@@ -307,6 +321,8 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.qlog_enabled = NGX_CONF_UNSET;
     h3scf->quic.qlog_sample_n = NGX_CONF_UNSET_UINT;
 
+    h3scf->quic.keylog_enabled = NGX_CONF_UNSET;
+
     h3scf->quic.congestion_control = NGX_CONF_UNSET_UINT;
     h3scf->quic.congestion_control_pacing = NGX_CONF_UNSET;
 #endif
@@ -374,6 +390,19 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
     if (conf->quic.qlog_path.len) {
         if (ngx_conf_full_name(cf->cycle, &conf->quic.qlog_path, 0)
+            != NGX_OK)
+        {
+            return NGX_CONF_ERROR;
+        }
+    }
+
+    ngx_conf_merge_value(conf->quic.keylog_enabled,
+                         prev->quic.keylog_enabled, 0);
+    ngx_conf_merge_str_value(conf->quic.keylog_path,
+                             prev->quic.keylog_path, "");
+
+    if (conf->quic.keylog_path.len) {
+        if (ngx_conf_full_name(cf->cycle, &conf->quic.keylog_path, 0)
             != NGX_OK)
         {
             return NGX_CONF_ERROR;
