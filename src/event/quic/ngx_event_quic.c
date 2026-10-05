@@ -2283,10 +2283,6 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
     quiche_config_set_cc_algorithm(config, qcf->congestion_control);
     quiche_config_enable_pacing(config, qcf->congestion_control_pacing);
 
-    if (qcf->keylog_enabled) {
-        quiche_config_log_keys(config);
-    }
-
     qcf->config = config;
 
     return NGX_OK;
