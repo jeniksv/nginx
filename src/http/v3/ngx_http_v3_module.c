@@ -150,7 +150,7 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.qlog_path),
       NULL },
 
-    { ngx_string("quic_qlog_sample_rate"),
+    { ngx_string("quic_qlog_sample"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_num_slot,
       NGX_HTTP_SRV_CONF_OFFSET,
