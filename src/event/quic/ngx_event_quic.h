@@ -130,6 +130,9 @@ typedef struct {
 
     ngx_uint_t                     congestion_control;
     ngx_flag_t                     congestion_control_pacing;
+
+    ngx_int_t                      send_capacity_factor;
+    ngx_flag_t                     send_capacity_cwnd_limit;
 #endif
 } ngx_quic_conf_t;
 

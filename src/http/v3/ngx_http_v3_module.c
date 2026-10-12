@@ -163,6 +163,20 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_v3_srv_conf_t, quic.congestion_control_pacing),
       NULL },
+
+    { ngx_string("quic_send_capacity_factor"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.send_capacity_factor),
+      NULL },
+
+    { ngx_string("quic_send_capacity_cwnd_limit"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.send_capacity_cwnd_limit),
+      NULL },
 #endif
 
       ngx_null_command
@@ -316,6 +330,9 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
 
     h3scf->quic.congestion_control = NGX_CONF_UNSET_UINT;
     h3scf->quic.congestion_control_pacing = NGX_CONF_UNSET;
+
+    h3scf->quic.send_capacity_factor = NGX_CONF_UNSET;
+    h3scf->quic.send_capacity_cwnd_limit = NGX_CONF_UNSET;
 #endif
 
     h3scf->quic.init = ngx_http_v3_init;
@@ -403,6 +420,10 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
                               QUICHE_CC_CUBIC);
     ngx_conf_merge_value(conf->quic.congestion_control_pacing,
                          prev->quic.congestion_control_pacing, 1);
+    ngx_conf_merge_value(conf->quic.send_capacity_factor,
+                         prev->quic.send_capacity_factor, 100);
+    ngx_conf_merge_value(conf->quic.send_capacity_cwnd_limit,
+                         prev->quic.send_capacity_cwnd_limit, 0);
 #endif
 
     if (conf->quic.host_key.len == 0) {

@@ -2281,6 +2281,10 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
     quiche_config_set_cc_algorithm(config, qcf->congestion_control);
     quiche_config_enable_pacing(config, qcf->congestion_control_pacing);
 
+    quiche_config_set_send_capacity_factor(config, qcf->send_capacity_factor);
+    quiche_config_set_send_capacity_cwnd_limit(config,
+                                               qcf->send_capacity_cwnd_limit);
+
     qcf->config = config;
 
     return NGX_OK;
