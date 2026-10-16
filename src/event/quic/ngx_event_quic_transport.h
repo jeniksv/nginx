@@ -86,8 +86,10 @@
 #define NGX_QUIC_FT_CONNECTION_CLOSE                     0x1C
 #define NGX_QUIC_FT_CONNECTION_CLOSE_APP                 0x1D
 #define NGX_QUIC_FT_HANDSHAKE_DONE                       0x1E
+#define NGX_QUIC_FT_IMMEDIATE_ACK                        0x1F
+#define NGX_QUIC_FT_ACK_FREQUENCY                        0xAF
 
-#define NGX_QUIC_FT_LAST  NGX_QUIC_FT_HANDSHAKE_DONE
+#define NGX_QUIC_FT_LAST  NGX_QUIC_FT_IMMEDIATE_ACK
 
 /* 22.5.  QUIC Transport Error Codes Registry */
 #define NGX_QUIC_ERR_NO_ERROR                            0x00
@@ -131,6 +133,7 @@
 #define NGX_QUIC_TP_ACTIVE_CONNECTION_ID_LIMIT           0x0E
 #define NGX_QUIC_TP_INITIAL_SCID                         0x0F
 #define NGX_QUIC_TP_RETRY_SCID                           0x10
+#define NGX_QUIC_TP_MIN_ACK_DELAY                        0xFF04DE1B
 
 #define NGX_QUIC_CID_LEN_MIN                                8
 #define NGX_QUIC_CID_LEN_MAX                               20
@@ -154,6 +157,14 @@ typedef struct {
     uint64_t                                    ce;
     uint64_t                                    ranges_length;
 } ngx_quic_ack_frame_t;
+
+
+typedef struct {
+    uint64_t                                    seqnum;
+    uint64_t                                    ack_eliciting_threshold;
+    uint64_t                                    max_ack_delay;
+    uint64_t                                    reordering_threshold;
+} ngx_quic_ack_frequency_frame_t;
 
 
 typedef struct {
@@ -276,6 +287,7 @@ struct ngx_quic_frame_s {
     ngx_chain_t                                *data;
     union {
         ngx_quic_ack_frame_t                    ack;
+        ngx_quic_ack_frequency_frame_t          ack_frequency;
         ngx_quic_crypto_frame_t                 crypto;
         ngx_quic_ordered_frame_t                ord;
         ngx_quic_new_conn_id_frame_t            ncid;
@@ -330,6 +342,7 @@ typedef struct {
 
     unsigned                                    need_ack:1;
     unsigned                                    key_phase:1;
+    unsigned                                    ack_immediately:1;
     unsigned                                    key_update:1;
     unsigned                                    parsed:1;
     unsigned                                    decrypted:1;
@@ -344,6 +357,8 @@ typedef struct {
 typedef struct {
     ngx_msec_t                 max_idle_timeout;
     ngx_msec_t                 max_ack_delay;
+    ngx_msec_t                 min_ack_delay;
+    unsigned                   min_ack_delay_set:1;
 
     size_t                     max_udp_payload_size;
     size_t                     initial_max_data;

@@ -64,6 +64,41 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.gso_enabled),
       NULL },
 
+    { ngx_string("quic_ack_frequency"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.ack_frequency_enabled),
+      NULL },
+
+    { ngx_string("quic_ack_frequency_max_delay"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.ack_frequency_max_delay),
+      NULL },
+
+    { ngx_string("quic_ack_frequency_min_delay"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.ack_frequency_min_delay),
+      NULL },
+
+    { ngx_string("quic_ack_eliciting_threshold"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.ack_eliciting_threshold),
+      NULL },
+
+    { ngx_string("quic_reordering_threshold"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.reordering_threshold),
+      NULL },
+
     { ngx_string("quic_host_key"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
       ngx_http_quic_host_key,
@@ -206,6 +241,11 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.max_concurrent_streams_uni = NGX_HTTP_V3_MAX_UNI_STREAMS;
     h3scf->quic.retry = NGX_CONF_UNSET;
     h3scf->quic.gso_enabled = NGX_CONF_UNSET;
+    h3scf->quic.ack_frequency_enabled = NGX_CONF_UNSET;
+    h3scf->quic.ack_frequency_max_delay = NGX_CONF_UNSET_MSEC;
+    h3scf->quic.ack_frequency_min_delay = NGX_CONF_UNSET_MSEC;
+    h3scf->quic.ack_eliciting_threshold = NGX_CONF_UNSET_UINT;
+    h3scf->quic.reordering_threshold = NGX_CONF_UNSET_UINT;
     h3scf->quic.stream_close_code = NGX_HTTP_V3_ERR_NO_ERROR;
     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
@@ -243,6 +283,31 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_value(conf->quic.retry, prev->quic.retry, 0);
     ngx_conf_merge_value(conf->quic.gso_enabled, prev->quic.gso_enabled, 0);
+    ngx_conf_merge_value(conf->quic.ack_frequency_enabled,
+                         prev->quic.ack_frequency_enabled, 0);
+    ngx_conf_merge_msec_value(conf->quic.ack_frequency_max_delay,
+                              prev->quic.ack_frequency_max_delay, 25);
+    ngx_conf_merge_msec_value(conf->quic.ack_frequency_min_delay,
+                              prev->quic.ack_frequency_min_delay, 1);
+    ngx_conf_merge_uint_value(conf->quic.ack_eliciting_threshold,
+                              prev->quic.ack_eliciting_threshold, 9);
+    ngx_conf_merge_uint_value(conf->quic.reordering_threshold,
+                              prev->quic.reordering_threshold, 3);
+
+    if (conf->quic.ack_frequency_max_delay >= 16384) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                          "\"quic_ack_frequency_max_delay\" must be less than "
+                          "16384ms");
+        return NGX_CONF_ERROR;
+    }
+
+    if (conf->quic.ack_frequency_min_delay > NGX_QUIC_DEFAULT_MAX_ACK_DELAY) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                          "\"quic_ack_frequency_min_delay\" must not exceed "
+                          "the local max_ack_delay (%dms)",
+                          NGX_QUIC_DEFAULT_MAX_ACK_DELAY);
+        return NGX_CONF_ERROR;
+    }
 
     ngx_conf_merge_str_value(conf->quic.host_key, prev->quic.host_key, "");
 

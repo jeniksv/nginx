@@ -223,6 +223,15 @@ ngx_quic_commit_send(ngx_connection_t *c)
             q = ngx_queue_head(&ctx->sending);
             f = ngx_queue_data(q, ngx_quic_frame_t, queue);
 
+            if (ctx->level == NGX_QUIC_ENCRYPTION_APPLICATION
+                && (f->type == NGX_QUIC_FT_ACK
+                    || f->type == NGX_QUIC_FT_ACK_ECN)
+                && (qc->largest_ack_sent == NGX_QUIC_UNSET_PN
+                    || qc->largest_ack_sent < f->u.ack.largest))
+            {
+                qc->largest_ack_sent = f->u.ack.largest;
+            }
+
             ngx_queue_remove(q);
 
             if (f->pkt_need_ack && !qc->closing) {

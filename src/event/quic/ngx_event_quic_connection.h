@@ -211,11 +211,13 @@ struct ngx_quic_send_ctx_s {
     uint64_t                          pending_ack; /* non sent ack-eliciting */
     uint64_t                          largest_range;
     uint64_t                          first_range;
+    uint64_t                          ack_range_floor;
     ngx_msec_t                        largest_received;
     ngx_msec_t                        ack_delay_start;
     ngx_uint_t                        nranges;
     ngx_quic_ack_range_t              ranges[NGX_QUIC_MAX_RANGES];
     ngx_uint_t                        send_ack;
+    unsigned                          ack_immediately:1;
 };
 
 
@@ -240,6 +242,12 @@ struct ngx_quic_connection_s {
 
     ngx_quic_tp_t                     tp;
     ngx_quic_tp_t                     ctp;
+
+    uint64_t                          ack_seqnum;
+    uint64_t                          ack_eliciting_threshold;
+    uint64_t                          ack_reordering_threshold;
+    uint64_t                          largest_ack_eliciting;
+    uint64_t                          largest_ack_sent;
 
     ngx_quic_send_ctx_t               send_ctx[NGX_QUIC_SEND_CTX_LAST];
 
