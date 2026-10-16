@@ -101,6 +101,8 @@ static ngx_int_t ngx_quic_frame_allowed(ngx_quic_header_t *pkt,
 static size_t ngx_quic_create_ping(u_char *p);
 static size_t ngx_quic_create_ack(u_char *p, ngx_quic_ack_frame_t *ack,
     ngx_chain_t *ranges);
+static size_t ngx_quic_create_ack_frequency(u_char *p,
+    ngx_quic_ack_frequency_frame_t *af);
 static size_t ngx_quic_create_reset_stream(u_char *p,
     ngx_quic_reset_stream_frame_t *rs);
 static size_t ngx_quic_create_stop_sending(u_char *p,
@@ -129,7 +131,7 @@ static size_t ngx_quic_create_retire_connection_id(u_char *p,
 static size_t ngx_quic_create_close(u_char *p, ngx_quic_frame_t *f);
 
 static ngx_int_t ngx_quic_parse_transport_param(u_char *p, u_char *end,
-    uint16_t id, ngx_quic_tp_t *dst);
+    uint64_t id, ngx_quic_tp_t *dst);
 
 
 uint32_t  ngx_quic_versions[] = {
@@ -761,7 +763,9 @@ ngx_quic_parse_frame(ngx_quic_header_t *pkt, u_char *start, u_char *end,
         return NGX_ERROR;
     }
 
-    if (varint > NGX_QUIC_FT_LAST) {
+    if (varint > NGX_QUIC_FT_LAST
+        && varint != NGX_QUIC_FT_ACK_FREQUENCY)
+    {
         pkt->error = NGX_QUIC_ERR_FRAME_ENCODING_ERROR;
         ngx_log_error(NGX_LOG_INFO, pkt->log, 0,
                       "quic unknown frame type 0x%xL", varint);
@@ -874,6 +878,33 @@ ngx_quic_parse_frame(ngx_quic_header_t *pkt, u_char *start, u_char *end,
         break;
 
     case NGX_QUIC_FT_PING:
+    case NGX_QUIC_FT_IMMEDIATE_ACK:
+        break;
+
+    case NGX_QUIC_FT_ACK_FREQUENCY:
+
+        p = ngx_quic_parse_int(p, end, &f->u.ack_frequency.seqnum);
+        if (p == NULL) {
+            goto error;
+        }
+
+        p = ngx_quic_parse_int(p, end,
+                              &f->u.ack_frequency.ack_eliciting_threshold);
+        if (p == NULL) {
+            goto error;
+        }
+
+        p = ngx_quic_parse_int(p, end, &f->u.ack_frequency.max_ack_delay);
+        if (p == NULL) {
+            goto error;
+        }
+
+        p = ngx_quic_parse_int(p, end,
+                              &f->u.ack_frequency.reordering_threshold);
+        if (p == NULL) {
+            goto error;
+        }
+
         break;
 
     case NGX_QUIC_FT_NEW_CONNECTION_ID:
@@ -1160,7 +1191,7 @@ error:
 static ngx_int_t
 ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
 {
-    uint8_t  ptype;
+    uint8_t  ptype, mask;
 
     /*
      * RFC 9000, 12.4. Frames and Frame Types: Table 3
@@ -1199,6 +1230,7 @@ ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
          /* CONNECTION_CLOSE */      0xF,
          /* CONNECTION_CLOSE2 */     0x3,
          /* HANDSHAKE_DONE */        0x0, /* only sent by server */
+         /* IMMEDIATE_ACK */         0x1,
     };
 
     if (ngx_quic_long_pkt(pkt->flags)) {
@@ -1217,7 +1249,14 @@ ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
         ptype = 1; /* application data */
     }
 
-    if (ptype & ngx_quic_frame_masks[frame_type]) {
+    if (frame_type == NGX_QUIC_FT_ACK_FREQUENCY) {
+        mask = 0x1;
+
+    } else {
+        mask = ngx_quic_frame_masks[frame_type];
+    }
+
+    if (ptype & mask) {
         return NGX_OK;
     }
 
@@ -1289,6 +1328,17 @@ ngx_quic_create_frame(u_char *p, ngx_quic_frame_t *f)
     f->need_ack = 1;
 
     switch (f->type) {
+    case NGX_QUIC_FT_IMMEDIATE_ACK:
+        if (p == NULL) {
+            return ngx_quic_varint_len(f->type);
+        }
+
+        ngx_quic_build_int(&p, f->type);
+        return ngx_quic_varint_len(f->type);
+
+    case NGX_QUIC_FT_ACK_FREQUENCY:
+        return ngx_quic_create_ack_frequency(p, &f->u.ack_frequency);
+
     case NGX_QUIC_FT_PING:
         return ngx_quic_create_ping(p);
 
@@ -1344,6 +1394,31 @@ ngx_quic_create_frame(u_char *p, ngx_quic_frame_t *f)
         /* BUG: unsupported frame type generated */
         return NGX_ERROR;
     }
+}
+
+
+static size_t
+ngx_quic_create_ack_frequency(u_char *p, ngx_quic_ack_frequency_frame_t *af)
+{
+    u_char  *start;
+
+    if (p == NULL) {
+        return ngx_quic_varint_len(NGX_QUIC_FT_ACK_FREQUENCY)
+               + ngx_quic_varint_len(af->seqnum)
+               + ngx_quic_varint_len(af->ack_eliciting_threshold)
+               + ngx_quic_varint_len(af->max_ack_delay)
+               + ngx_quic_varint_len(af->reordering_threshold);
+    }
+
+    start = p;
+
+    ngx_quic_build_int(&p, NGX_QUIC_FT_ACK_FREQUENCY);
+    ngx_quic_build_int(&p, af->seqnum);
+    ngx_quic_build_int(&p, af->ack_eliciting_threshold);
+    ngx_quic_build_int(&p, af->max_ack_delay);
+    ngx_quic_build_int(&p, af->reordering_threshold);
+
+    return p - start;
 }
 
 
@@ -1616,7 +1691,7 @@ ngx_quic_create_max_streams(u_char *p, ngx_quic_max_streams_frame_t *ms)
 
 
 static ngx_int_t
-ngx_quic_parse_transport_param(u_char *p, u_char *end, uint16_t id,
+ngx_quic_parse_transport_param(u_char *p, u_char *end, uint64_t id,
     ngx_quic_tp_t *dst)
 {
     uint64_t   varint;
@@ -1645,6 +1720,7 @@ ngx_quic_parse_transport_param(u_char *p, u_char *end, uint16_t id,
     case NGX_QUIC_TP_INITIAL_MAX_STREAMS_UNI:
     case NGX_QUIC_TP_ACK_DELAY_EXPONENT:
     case NGX_QUIC_TP_MAX_ACK_DELAY:
+    case NGX_QUIC_TP_MIN_ACK_DELAY:
     case NGX_QUIC_TP_ACTIVE_CONNECTION_ID_LIMIT:
 
         p = ngx_quic_parse_int(p, end, &varint);
@@ -1703,6 +1779,15 @@ ngx_quic_parse_transport_param(u_char *p, u_char *end, uint16_t id,
 
     case NGX_QUIC_TP_MAX_ACK_DELAY:
         dst->max_ack_delay = varint;
+        break;
+
+    case NGX_QUIC_TP_MIN_ACK_DELAY:
+        if (dst->min_ack_delay_set || p != end) {
+            return NGX_ERROR;
+        }
+
+        dst->min_ack_delay = varint;
+        dst->min_ack_delay_set = 1;
         break;
 
     case NGX_QUIC_TP_ACTIVE_CONNECTION_ID_LIMIT:
@@ -2017,6 +2102,8 @@ ngx_quic_init_transport_params(ngx_quic_tp_t *tp, ngx_quic_conf_t *qcf)
     tp->initial_max_streams_uni = qcf->max_concurrent_streams_uni;
 
     tp->max_ack_delay = NGX_QUIC_DEFAULT_MAX_ACK_DELAY;
+    tp->min_ack_delay = NGX_QUIC_MIN_ACK_DELAY;
+    tp->min_ack_delay_set = 1;
     tp->ack_delay_exponent = NGX_QUIC_DEFAULT_ACK_DELAY_EXPONENT;
 
     tp->active_connection_id_limit = qcf->active_connection_id_limit;
@@ -2096,6 +2183,8 @@ ngx_quic_create_transport_params(u_char *pos, u_char *end, ngx_quic_tp_t *tp,
     len += ngx_quic_tp_len(NGX_QUIC_TP_MAX_ACK_DELAY,
                            tp->max_ack_delay);
 
+    len += ngx_quic_tp_len(NGX_QUIC_TP_MIN_ACK_DELAY, tp->min_ack_delay);
+
     len += ngx_quic_tp_len(NGX_QUIC_TP_ACK_DELAY_EXPONENT,
                            tp->ack_delay_exponent);
 
@@ -2150,6 +2239,8 @@ ngx_quic_create_transport_params(u_char *pos, u_char *end, ngx_quic_tp_t *tp,
 
     ngx_quic_tp_vint(NGX_QUIC_TP_MAX_ACK_DELAY,
                      tp->max_ack_delay);
+
+    ngx_quic_tp_vint(NGX_QUIC_TP_MIN_ACK_DELAY, tp->min_ack_delay);
 
     ngx_quic_tp_vint(NGX_QUIC_TP_ACK_DELAY_EXPONENT,
                      tp->ack_delay_exponent);

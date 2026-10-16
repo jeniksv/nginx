@@ -918,17 +918,19 @@ ngx_quic_send_path_mtu_probe(ngx_connection_t *c, ngx_quic_path_t *path)
     ngx_quic_send_ctx_t    *ctx;
     ngx_quic_connection_t  *qc;
 
+    qc = ngx_quic_get_connection(c);
+
     frame = ngx_quic_alloc_frame(c);
     if (frame == NULL) {
         return NGX_ERROR;
     }
 
     frame->level = NGX_QUIC_ENCRYPTION_APPLICATION;
-    frame->type = NGX_QUIC_FT_PING;
+    frame->type = qc->ctp.min_ack_delay_set ? NGX_QUIC_FT_IMMEDIATE_ACK
+                                          : NGX_QUIC_FT_PING;
     frame->ignore_loss = 1;
     frame->ignore_congestion = 1;
 
-    qc = ngx_quic_get_connection(c);
     ctx = ngx_quic_get_send_ctx(qc, NGX_QUIC_ENCRYPTION_APPLICATION);
     pnum = ctx->pnum;
 

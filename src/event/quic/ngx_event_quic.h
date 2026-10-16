@@ -32,6 +32,7 @@
 
 #define NGX_QUIC_DEFAULT_ACK_DELAY_EXPONENT  3
 #define NGX_QUIC_DEFAULT_MAX_ACK_DELAY       25
+#define NGX_QUIC_MIN_ACK_DELAY               1000
 #define NGX_QUIC_DEFAULT_HOST_KEY_LEN        32
 #define NGX_QUIC_SR_KEY_LEN                  32
 #define NGX_QUIC_AV_KEY_LEN                  32
@@ -90,6 +91,7 @@ typedef struct {
     ngx_uint_t                     max_concurrent_streams_bidi;
     ngx_uint_t                     max_concurrent_streams_uni;
     ngx_uint_t                     active_connection_id_limit;
+    ngx_uint_t                     ack_frequency;
     ngx_int_t                      stream_close_code;
     ngx_int_t                      stream_reject_code_uni;
     ngx_int_t                      stream_reject_code_bidi;

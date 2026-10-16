@@ -10,8 +10,6 @@
 #include <ngx_event_quic_connection.h>
 
 
-#define NGX_QUIC_MAX_ACK_GAP                 2
-
 /* RFC 9002, 6.1.1. Packet Threshold: kPacketThreshold */
 #define NGX_QUIC_PKT_THR                     3 /* packets */
 /* RFC 9002, 6.1.2. Time Threshold: kGranularity */
@@ -52,6 +50,8 @@ static ngx_msec_t ngx_quic_oldest_sent_packet(ngx_connection_t *c);
 static void ngx_quic_congestion_lost(ngx_connection_t *c,
     ngx_quic_frame_t *frame);
 static void ngx_quic_lost_handler(ngx_event_t *ev);
+static ngx_uint_t ngx_quic_ack_reordered(ngx_quic_connection_t *qc,
+    ngx_quic_send_ctx_t *ctx);
 
 
 /* RFC 9002, 6.1.2. Time Threshold: kTimeThreshold, kGranularity */
@@ -87,6 +87,72 @@ ngx_quic_packet_threshold(ngx_quic_send_ctx_t *ctx)
     }
 
     return pkt_thr;
+}
+
+
+ngx_int_t
+ngx_quic_handle_ack_frequency_frame(ngx_connection_t *c, ngx_quic_frame_t *f)
+{
+    ngx_quic_connection_t           *qc;
+    ngx_quic_ack_frequency_frame_t  *af;
+
+    qc = ngx_quic_get_connection(c);
+    af = &f->u.ack_frequency;
+
+    if (qc->ack_seqnum != NGX_QUIC_UNSET_PN && af->seqnum <= qc->ack_seqnum) {
+        return NGX_OK;
+    }
+
+    if (af->max_ack_delay < qc->tp.min_ack_delay
+        || af->max_ack_delay >= 16384000)
+    {
+        qc->error = NGX_QUIC_ERR_PROTOCOL_VIOLATION;
+        qc->error_ftype = NGX_QUIC_FT_ACK_FREQUENCY;
+        qc->error_reason = "invalid requested max_ack_delay";
+        return NGX_ERROR;
+    }
+
+    qc->ack_seqnum = af->seqnum;
+    qc->ack_eliciting_threshold = af->ack_eliciting_threshold;
+    qc->ack_reordering_threshold = af->reordering_threshold;
+
+    /* Round down to the timer granularity to avoid exceeding the delay. */
+    qc->tp.max_ack_delay = af->max_ack_delay / 1000;
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+ngx_quic_send_ack_frequency(ngx_connection_t *c)
+{
+    ngx_quic_frame_t       *frame;
+    ngx_quic_connection_t  *qc;
+
+    qc = ngx_quic_get_connection(c);
+
+    if (!qc->conf->ack_frequency || !qc->ctp.min_ack_delay_set) {
+        return NGX_OK;
+    }
+
+    frame = ngx_quic_alloc_frame(c);
+    if (frame == NULL) {
+        return NGX_ERROR;
+    }
+
+    frame->level = NGX_QUIC_ENCRYPTION_APPLICATION;
+    frame->type = NGX_QUIC_FT_ACK_FREQUENCY;
+    frame->u.ack_frequency.seqnum = 0;
+    frame->u.ack_frequency.ack_eliciting_threshold =
+                                                 qc->conf->ack_frequency - 1;
+
+    /* Keep the peer's advertised delay, including for PTO calculations. */
+    frame->u.ack_frequency.max_ack_delay = qc->ctp.max_ack_delay * 1000;
+    frame->u.ack_frequency.reordering_threshold = NGX_QUIC_PKT_THR - 1;
+
+    ngx_quic_queue_frame(qc, frame);
+
+    return NGX_OK;
 }
 
 
@@ -789,13 +855,15 @@ ngx_quic_resend_frames(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
         case NGX_QUIC_FT_ACK_ECN:
             if (ctx->level == NGX_QUIC_ENCRYPTION_APPLICATION) {
                 /* force generation of most recent acknowledgment */
-                ctx->send_ack = NGX_QUIC_MAX_ACK_GAP;
+                ctx->send_ack = 1;
+                ctx->ack_immediately = 1;
             }
 
             ngx_quic_free_frame(c, f);
             break;
 
         case NGX_QUIC_FT_PING:
+        case NGX_QUIC_FT_IMMEDIATE_ACK:
         case NGX_QUIC_FT_PATH_CHALLENGE:
         case NGX_QUIC_FT_PATH_RESPONSE:
         case NGX_QUIC_FT_CONNECTION_CLOSE:
@@ -1153,6 +1221,12 @@ ngx_quic_pto_handler(ngx_event_t *ev)
 
             f->level = ctx->level;
             f->type = NGX_QUIC_FT_PING;
+            if (ctx->level == NGX_QUIC_ENCRYPTION_APPLICATION
+                && qc->ctp.min_ack_delay_set)
+            {
+                f->type = NGX_QUIC_FT_IMMEDIATE_ACK;
+            }
+
             f->ignore_congestion = 1;
 
             if (ngx_quic_frame_sendto(c, f, 0, qc->path) == NGX_ERROR) {
@@ -1212,6 +1286,25 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
         }
 
         ctx->send_ack++;
+        ctx->ack_immediately |= pkt->ack_immediately;
+
+        /* Report packets the peer could already have declared lost. */
+        if (pkt->level == NGX_QUIC_ENCRYPTION_APPLICATION
+            && qc->ack_reordering_threshold != 0
+            && qc->largest_ack_sent != NGX_QUIC_UNSET_PN
+            && qc->largest_ack_sent >= qc->ack_reordering_threshold
+            && pkt->pn <= qc->largest_ack_sent - qc->ack_reordering_threshold)
+        {
+            pkt->ack_immediately = 1;
+            ctx->ack_immediately = 1;
+        }
+
+        if (pkt->level == NGX_QUIC_ENCRYPTION_APPLICATION
+            && (qc->largest_ack_eliciting == NGX_QUIC_UNSET_PN
+                || qc->largest_ack_eliciting < pkt->pn))
+        {
+            qc->largest_ack_eliciting = pkt->pn;
+        }
 
         if (ctx->pending_ack == NGX_QUIC_UNSET_PN
             || ctx->pending_ack < pkt->pn)
@@ -1226,6 +1319,16 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
     if (base == NGX_QUIC_UNSET_PN) {
         ctx->largest_range = pn;
         ctx->largest_received = pkt->received;
+
+        if (pkt->need_ack && pkt->level == NGX_QUIC_ENCRYPTION_APPLICATION
+            && qc->ack_seqnum != NGX_QUIC_UNSET_PN
+            && qc->largest_ack_sent == NGX_QUIC_UNSET_PN
+            && qc->ack_reordering_threshold != 0
+            && pn >= qc->ack_reordering_threshold)
+        {
+            ctx->ack_immediately = 1;
+        }
+
         return NGX_OK;
     }
 
@@ -1255,6 +1358,10 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
                     if (ngx_quic_send_ack(c, ctx) != NGX_OK) {
                         return NGX_ERROR;
                     }
+
+                    ctx->send_ack = pkt->need_ack;
+                    ctx->ack_delay_start = ngx_current_msec;
+                    ctx->ack_immediately = pkt->ack_immediately;
                 }
 
                 if (prev_pending == ctx->pending_ack || !pkt->need_ack) {
@@ -1270,8 +1377,9 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
             ctx->largest_received = pkt->received;
 
             /* packet is out of order, force send */
-            if (pkt->need_ack) {
-                ctx->send_ack = NGX_QUIC_MAX_ACK_GAP;
+            if (pkt->need_ack && qc->ack_reordering_threshold == 1) {
+                pkt->ack_immediately = 1;
+                ctx->ack_immediately = 1;
             }
 
             i = 0;
@@ -1283,8 +1391,9 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
     /*  pn < base, perform lookup in existing ranges */
 
     /* packet is out of order */
-    if (pkt->need_ack) {
-        ctx->send_ack = NGX_QUIC_MAX_ACK_GAP;
+    if (pkt->need_ack && qc->ack_reordering_threshold == 1) {
+        pkt->ack_immediately = 1;
+        ctx->ack_immediately = 1;
     }
 
     if (pn >= smallest && pn <= largest) {
@@ -1350,6 +1459,10 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
                         if (ngx_quic_send_ack(c, ctx) != NGX_OK) {
                             return NGX_ERROR;
                         }
+
+                        ctx->send_ack = pkt->need_ack;
+                        ctx->ack_delay_start = ngx_current_msec;
+                        ctx->ack_immediately = pkt->ack_immediately;
                     }
 
                     if (prev_pending == ctx->pending_ack || !pkt->need_ack) {
@@ -1418,6 +1531,47 @@ insert:
 }
 
 
+static ngx_uint_t
+ngx_quic_ack_reordered(ngx_quic_connection_t *qc, ngx_quic_send_ctx_t *ctx)
+{
+    uint64_t    smallest, missing, floor, threshold, largest;
+    ngx_uint_t  i;
+
+    threshold = qc->ack_reordering_threshold;
+    largest = qc->largest_ack_eliciting;
+
+    if (threshold == 0 || largest == NGX_QUIC_UNSET_PN) {
+        return 0;
+    }
+
+    /* Do not repeatedly report gaps already beyond the reordering window. */
+    floor = 0;
+
+    if (qc->largest_ack_sent != NGX_QUIC_UNSET_PN
+        && qc->largest_ack_sent >= threshold)
+    {
+        floor = qc->largest_ack_sent - threshold + 1;
+    }
+
+    smallest = ctx->largest_range - ctx->first_range;
+
+    for (i = 0; i < ctx->nranges; i++) {
+        missing = smallest - ctx->ranges[i].gap - 1;
+        missing = ngx_max(missing, floor);
+
+        if (missing < smallest && missing <= largest
+            && largest - missing >= threshold)
+        {
+            return 1;
+        }
+
+        smallest -= ctx->ranges[i].gap + ctx->ranges[i].range + 2;
+    }
+
+    return 0;
+}
+
+
 ngx_int_t
 ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
 {
@@ -1434,12 +1588,24 @@ ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
         qc = ngx_quic_get_connection(c);
 
         if (ngx_queue_empty(&ctx->frames)
-            && ctx->send_ack < NGX_QUIC_MAX_ACK_GAP
+            && !ctx->ack_immediately
+            && ctx->send_ack <= qc->ack_eliciting_threshold
+            && !ngx_quic_ack_reordered(qc, ctx)
             && delay < qc->tp.max_ack_delay)
         {
-            if (!qc->push.timer_set && !qc->closing) {
-                ngx_add_timer(&qc->push,
-                              qc->tp.max_ack_delay - delay);
+            delay = qc->tp.max_ack_delay - delay;
+
+            if (!qc->closing
+                && (!qc->push.timer_set
+                    || (ngx_msec_int_t)
+                       (qc->push.timer.key - ngx_current_msec)
+                       > (ngx_msec_int_t) delay))
+            {
+                if (qc->push.timer_set) {
+                    ngx_del_timer(&qc->push);
+                }
+
+                ngx_add_timer(&qc->push, delay);
             }
 
             return NGX_OK;
@@ -1449,8 +1615,6 @@ ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
     if (ngx_quic_send_ack(c, ctx) != NGX_OK) {
         return NGX_ERROR;
     }
-
-    ctx->send_ack = 0;
 
     return NGX_OK;
 }

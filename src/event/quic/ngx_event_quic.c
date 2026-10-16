@@ -182,6 +182,14 @@ ngx_quic_apply_transport_params(ngx_connection_t *c, ngx_quic_tp_t *ctp)
         return NGX_ERROR;
     }
 
+    if (ctp->min_ack_delay_set
+        && ctp->min_ack_delay > (uint64_t) ctp->max_ack_delay * 1000)
+    {
+        qc->error = NGX_QUIC_ERR_TRANSPORT_PARAMETER_ERROR;
+        qc->error_reason = "invalid min_ack_delay";
+        return NGX_ERROR;
+    }
+
     if (ctp->max_idle_timeout > 0
         && ctp->max_idle_timeout < qc->tp.max_idle_timeout)
     {
@@ -302,6 +310,12 @@ ngx_quic_new_connection(ngx_connection_t *c, ngx_quic_conf_t *conf,
     ctp->ack_delay_exponent = NGX_QUIC_DEFAULT_ACK_DELAY_EXPONENT;
     ctp->max_ack_delay = NGX_QUIC_DEFAULT_MAX_ACK_DELAY;
     ctp->active_connection_id_limit = 2;
+
+    qc->ack_seqnum = NGX_QUIC_UNSET_PN;
+    qc->ack_eliciting_threshold = 1;
+    qc->ack_reordering_threshold = 1;
+    qc->largest_ack_eliciting = NGX_QUIC_UNSET_PN;
+    qc->largest_ack_sent = NGX_QUIC_UNSET_PN;
 
     ngx_queue_init(&qc->streams.uninitialized);
     ngx_queue_init(&qc->streams.free);
@@ -1262,6 +1276,17 @@ ngx_quic_handle_frames(ngx_connection_t *c, ngx_quic_header_t *pkt)
             break;
 
         case NGX_QUIC_FT_PING:
+            break;
+
+        case NGX_QUIC_FT_ACK_FREQUENCY:
+            if (ngx_quic_handle_ack_frequency_frame(c, &frame) != NGX_OK) {
+                return NGX_ERROR;
+            }
+
+            break;
+
+        case NGX_QUIC_FT_IMMEDIATE_ACK:
+            pkt->ack_immediately = 1;
             break;
 
         case NGX_QUIC_FT_STREAM:

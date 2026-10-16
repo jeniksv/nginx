@@ -745,6 +745,20 @@ ngx_quic_log_frame(ngx_log_t *log, ngx_quic_frame_t *f, ngx_uint_t tx)
         p = ngx_slprintf(p, last, "PING");
         break;
 
+    case NGX_QUIC_FT_IMMEDIATE_ACK:
+        p = ngx_slprintf(p, last, "IMMEDIATE_ACK");
+        break;
+
+    case NGX_QUIC_FT_ACK_FREQUENCY:
+        p = ngx_slprintf(p, last,
+                         "ACK_FREQUENCY seq:%uL threshold:%uL delay:%uL"
+                         " reordering:%uL",
+                         f->u.ack_frequency.seqnum,
+                         f->u.ack_frequency.ack_eliciting_threshold,
+                         f->u.ack_frequency.max_ack_delay,
+                         f->u.ack_frequency.reordering_threshold);
+        break;
+
     case NGX_QUIC_FT_NEW_CONNECTION_ID:
         p = ngx_slprintf(p, last,
                          "NEW_CONNECTION_ID seq:%uL retire:%uL len:%ud",
