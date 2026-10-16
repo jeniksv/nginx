@@ -1237,6 +1237,16 @@ ngx_quic_send_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
 
     ngx_queue_insert_head(&ctx->frames, &frame->queue);
 
+    ctx->send_ack = 0;
+    ctx->ack_immediately = 0;
+
+    if (ctx->level == NGX_QUIC_ENCRYPTION_APPLICATION
+        && (qc->largest_ack_sent == NGX_QUIC_UNSET_PN
+            || qc->largest_ack_sent < ctx->largest_range))
+    {
+        qc->largest_ack_sent = ctx->largest_range;
+    }
+
     return NGX_OK;
 }
 
