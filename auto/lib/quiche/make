@@ -13,6 +13,6 @@ cat << END >> $NGX_MAKEFILE
 
 $QUICHE/target/$QUICHE_BUILD_TARGET/libquiche.a: \
  $NGX_MAKEFILE
-	cd $QUICHE && BORING_BSSL_PATH="/usr/local/boringssl" BORING_BSSL_INCLUDE_PATH="/usr/local/boringssl/include" cargo build $QUICHE_BUILD_FLAGS $QUICHE_OPT
+	cd $QUICHE && cargo build $QUICHE_BUILD_FLAGS $QUICHE_OPT
 
 END
