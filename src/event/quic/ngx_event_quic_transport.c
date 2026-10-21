@@ -103,6 +103,7 @@ static size_t ngx_quic_create_ack(u_char *p, ngx_quic_ack_frame_t *ack,
     ngx_chain_t *ranges);
 static size_t ngx_quic_create_ack_frequency(u_char *p,
     ngx_quic_ack_frequency_frame_t *af);
+static size_t ngx_quic_create_immediate_ack(u_char *p);
 static size_t ngx_quic_create_reset_stream(u_char *p,
     ngx_quic_reset_stream_frame_t *rs);
 static size_t ngx_quic_create_stop_sending(u_char *p,
@@ -1328,16 +1329,11 @@ ngx_quic_create_frame(u_char *p, ngx_quic_frame_t *f)
     f->need_ack = 1;
 
     switch (f->type) {
-    case NGX_QUIC_FT_IMMEDIATE_ACK:
-        if (p == NULL) {
-            return ngx_quic_varint_len(f->type);
-        }
-
-        ngx_quic_build_int(&p, f->type);
-        return ngx_quic_varint_len(f->type);
-
     case NGX_QUIC_FT_ACK_FREQUENCY:
         return ngx_quic_create_ack_frequency(p, &f->u.ack_frequency);
+
+    case NGX_QUIC_FT_IMMEDIATE_ACK:
+        return ngx_quic_create_immediate_ack(p);
 
     case NGX_QUIC_FT_PING:
         return ngx_quic_create_ping(p);
@@ -1398,8 +1394,20 @@ ngx_quic_create_frame(u_char *p, ngx_quic_frame_t *f)
 
 
 static size_t
-ngx_quic_create_ack_frequency(u_char *p, ngx_quic_ack_frequency_frame_t *af)
+ngx_quic_create_immediate_ack(u_char *p) {
 {
+        if (p == NULL) {
+            return ngx_quic_varint_len(NGX_QUIC_FT_IMMEDIATE_ACK);
+        }
+
+        ngx_quic_build_int(&p, NGX_QUIC_FT_IMMEDIATE_ACK);
+
+        return ngx_quic_varint_len(NGX_QUIC_FT_IMMEDIATE_ACK);
+}
+
+
+static size_t
+ngx_quic_create_ack_frequency(u_char *p, ngx_quic_ack_frequency_frame_t *af) {
     u_char  *start;
 
     if (p == NULL) {
