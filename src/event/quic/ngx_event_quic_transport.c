@@ -1192,7 +1192,7 @@ error:
 static ngx_int_t
 ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
 {
-    uint8_t  ptype, mask;
+    uint8_t  ptype;
 
     /*
      * RFC 9000, 12.4. Frames and Frame Types: Table 3
@@ -1232,6 +1232,7 @@ ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
          /* CONNECTION_CLOSE2 */     0x3,
          /* HANDSHAKE_DONE */        0x0, /* only sent by server */
          /* IMMEDIATE_ACK */         0x1,
+         /* ACK_FREQUENCY */         [NGX_QUIC_FT_ACK_FREQUENCY] = 0x1,
     };
 
     if (ngx_quic_long_pkt(pkt->flags)) {
@@ -1250,14 +1251,9 @@ ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
         ptype = 1; /* application data */
     }
 
-    if (frame_type == NGX_QUIC_FT_ACK_FREQUENCY) {
-        mask = 0x1;
-
-    } else {
-        mask = ngx_quic_frame_masks[frame_type];
-    }
-
-    if (ptype & mask) {
+    if (ptype & ngx_quic_frame_masks[frame_type]
+        || frame_type == NGX_QUIC_FT_ACK_FREQUENCY) {
+    {
         return NGX_OK;
     }
 
