@@ -131,7 +131,7 @@ static size_t ngx_quic_create_retire_connection_id(u_char *p,
 static size_t ngx_quic_create_close(u_char *p, ngx_quic_frame_t *f);
 
 static ngx_int_t ngx_quic_parse_transport_param(u_char *p, u_char *end,
-    uint64_t id, ngx_quic_tp_t *dst);
+    uint16_t id, ngx_quic_tp_t *dst);
 
 
 uint32_t  ngx_quic_versions[] = {
@@ -1691,7 +1691,7 @@ ngx_quic_create_max_streams(u_char *p, ngx_quic_max_streams_frame_t *ms)
 
 
 static ngx_int_t
-ngx_quic_parse_transport_param(u_char *p, u_char *end, uint64_t id,
+ngx_quic_parse_transport_param(u_char *p, u_char *end, uint16_t id,
     ngx_quic_tp_t *dst)
 {
     uint64_t   varint;
