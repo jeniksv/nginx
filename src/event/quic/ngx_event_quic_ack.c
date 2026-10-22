@@ -1397,7 +1397,6 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
     if (base == NGX_QUIC_UNSET_PN) {
         ctx->largest_range = pn;
         ctx->largest_received = pkt->received;
-
         return NGX_OK;
     }
 
