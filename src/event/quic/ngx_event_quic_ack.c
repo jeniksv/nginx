@@ -50,7 +50,7 @@ static ngx_msec_t ngx_quic_oldest_sent_packet(ngx_connection_t *c);
 static void ngx_quic_congestion_lost(ngx_connection_t *c,
     ngx_quic_frame_t *frame);
 static void ngx_quic_lost_handler(ngx_event_t *ev);
-static ngx_uint_t ngx_quic_ack_reordered(ngx_quic_connection_t *qc,
+static ngx_int_t ngx_quic_ack_reordered(ngx_quic_connection_t *qc,
     ngx_quic_send_ctx_t *ctx);
 
 
@@ -1570,7 +1570,7 @@ insert:
 }
 
 
-static ngx_uint_t
+static ngx_int_t
 ngx_quic_ack_reordered(ngx_quic_connection_t *qc, ngx_quic_send_ctx_t *ctx)
 {
     uint64_t    smallest, missing, floor, threshold, largest;
@@ -1628,8 +1628,8 @@ ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
 
         if (ngx_queue_empty(&ctx->frames)
             && !ctx->ack_immediately
-            && ctx->send_ack <= qc->ack_eliciting_threshold
             && !ngx_quic_ack_reordered(qc, ctx)
+            && ctx->send_ack <= qc->ack_eliciting_threshold
             && delay < qc->tp.max_ack_delay)
         {
             delay = qc->tp.max_ack_delay - delay;
