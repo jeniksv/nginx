@@ -211,6 +211,7 @@ struct ngx_quic_send_ctx_s {
     uint64_t                          pending_ack; /* non sent ack-eliciting */
     uint64_t                          largest_range;
     uint64_t                          first_range;
+    uint64_t                          ack_range_floor;
     ngx_msec_t                        largest_received;
     ngx_msec_t                        ack_delay_start;
     ngx_uint_t                        nranges;
