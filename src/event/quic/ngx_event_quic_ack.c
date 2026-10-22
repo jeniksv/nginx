@@ -147,7 +147,6 @@ ngx_quic_handle_ack_frequency_frame(ngx_connection_t *c, ngx_quic_frame_t *f)
     qc->ack_eliciting_threshold = af->ack_eliciting_threshold;
     qc->ack_reordering_threshold = af->reordering_threshold;
 
-    /* Round down to the timer granularity to avoid exceeding the delay. */
     qc->tp.max_ack_delay = af->max_ack_delay / 1000;
 
     return NGX_OK;
@@ -663,7 +662,6 @@ ngx_quic_drop_ack_ranges(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx,
         && qc->ack_seqnum != NGX_QUIC_UNSET_PN
         && qc->ack_reordering_threshold != 0)
     {
-        /* Keep gaps that have not yet crossed the reordering threshold. */
         if (qc->largest_ack_sent == NGX_QUIC_UNSET_PN
             || qc->largest_ack_sent < qc->ack_reordering_threshold)
         {
@@ -728,7 +726,6 @@ ngx_quic_forget_ack_range(ngx_quic_send_ctx_t *ctx)
         smallest = largest - ctx->ranges[i].range;
     }
 
-    /* The last range will be evicted when inserting a new one. */
     ctx->ack_range_floor = ngx_max(ctx->ack_range_floor, largest + 1);
 }
 
@@ -1366,7 +1363,6 @@ ngx_quic_ack_packet(ngx_connection_t *c, ngx_quic_header_t *pkt)
         ctx->send_ack++;
         ctx->ack_immediately |= pkt->ack_immediately;
 
-        /* Report packets the peer could already have declared lost. */
         if (pkt->level == NGX_QUIC_ENCRYPTION_APPLICATION
             && qc->ack_reordering_threshold > 0
             && qc->largest_ack_sent != NGX_QUIC_UNSET_PN
@@ -1618,7 +1614,6 @@ ngx_quic_ack_reordered(ngx_quic_connection_t *qc, ngx_quic_send_ctx_t *ctx)
         return 0;
     }
 
-    /* Do not repeatedly report gaps already beyond the reordering window. */
     floor = ctx->ack_range_floor;
 
     if (qc->largest_ack_sent != NGX_QUIC_UNSET_PN
