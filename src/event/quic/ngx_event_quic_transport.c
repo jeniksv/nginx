@@ -1251,9 +1251,7 @@ ngx_quic_frame_allowed(ngx_quic_header_t *pkt, ngx_uint_t frame_type)
         ptype = 1; /* application data */
     }
 
-    if (ptype & ngx_quic_frame_masks[frame_type]
-        || frame_type == NGX_QUIC_FT_ACK_FREQUENCY) {
-    {
+    if (ptype & ngx_quic_frame_masks[frame_type]) {
         return NGX_OK;
     }
 
