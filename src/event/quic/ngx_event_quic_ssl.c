@@ -762,6 +762,10 @@ ngx_quic_handshake(ngx_connection_t *c)
     frame->type = NGX_QUIC_FT_HANDSHAKE_DONE;
     ngx_quic_queue_frame(qc, frame);
 
+    if (ngx_quic_send_ack_frequency(c) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
     if (qc->conf->retry) {
         if (ngx_quic_send_new_token(c, qc->path) != NGX_OK) {
             return NGX_ERROR;

@@ -94,6 +94,12 @@ typedef struct {
     ngx_int_t                      stream_reject_code_uni;
     ngx_int_t                      stream_reject_code_bidi;
 
+    ngx_flag_t                     ack_frequency_enabled;
+    ngx_msec_t                     ack_frequency_max_delay;
+    ngx_msec_t                     ack_frequency_min_delay;
+    ngx_uint_t                     ack_eliciting_threshold;
+    ngx_uint_t                     reordering_threshold;
+
     ngx_quic_init_pt               init;
     ngx_quic_shutdown_pt           shutdown;
 

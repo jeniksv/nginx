@@ -14,6 +14,11 @@
 
 ngx_int_t ngx_quic_handle_ack_frame(ngx_connection_t *c,
     ngx_quic_header_t *pkt, ngx_quic_frame_t *f);
+ngx_int_t ngx_quic_handle_ack_frequency_frame(ngx_connection_t *c,
+    ngx_quic_frame_t *f);
+ngx_int_t ngx_quic_handle_immediate_ack_frame(ngx_connection_t *c,
+    ngx_quic_header_t *pkt);
+ngx_int_t ngx_quic_send_ack_frequency(ngx_connection_t *c);
 
 void ngx_quic_congestion_ack(ngx_connection_t *c,
     ngx_quic_frame_t *frame);
