@@ -1674,14 +1674,14 @@ ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
             && ctx->send_ack <= qc->ack_eliciting_threshold
             && delay < qc->tp.max_ack_delay)
         {
-            if (!qc->closing
-                && (!qc->push.timer_set
-                    || (ngx_msec_int_t)
-                       (qc->push.timer.key - ngx_current_msec)
-                       > (ngx_msec_int_t) delay))
-            {
+            if (!qc->closing) {
+
                 if (qc->push.timer_set) {
-                    ngx_del_timer(&qc->push);
+                    if ((qc->push.timer.key - ngx_current_msec)
+                        > (qc->tp.max_ack_delay - delay))
+                    {
+                        ngx_del_timer(&qc->push);
+                    }
                 }
 
                 ngx_add_timer(&qc->push, qc->tp.max_ack_delay - delay);
