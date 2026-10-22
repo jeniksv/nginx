@@ -1698,5 +1698,8 @@ ngx_quic_generate_ack(ngx_connection_t *c, ngx_quic_send_ctx_t *ctx)
         return NGX_ERROR;
     }
 
+    ctx->send_ack = 0;
+    ctx->ack_immediately = 0;
+
     return NGX_OK;
 }
