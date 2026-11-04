@@ -386,7 +386,7 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
                               NGX_CONF_UNSET_SIZE);
     ngx_conf_merge_size_value(conf->quic.max_send_udp_payload_size,
                               prev->quic.max_send_udp_payload_size,
-                              1452);
+                              NGX_QUIC_MAX_UDP_PAYLOAD_SIZE);
     ngx_conf_merge_value(conf->quic.qlog_enabled,
                          prev->quic.qlog_enabled, 0);
     ngx_conf_merge_str_value(conf->quic.qlog_path,
