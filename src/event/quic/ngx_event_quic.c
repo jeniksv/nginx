@@ -2073,8 +2073,21 @@ ngx_quiche_handle_initial_packet(ngx_connection_t *c, ngx_quic_conf_t *conf)
         return NGX_ERROR;
     }
 
+    /* packet does not belong to a connection */
+
+    if (ngx_quic_short_pkt(c->buffer->pos[0])) {
+        pkt.len = ngx_buf_size(c->buffer);
+        return ngx_quic_send_stateless_reset(c, conf, &pkt);
+    }
+
     if (!quiche_version_is_supported(pkt.version)) {
         return ngx_quic_negotiate_version(c, &pkt);
+    }
+
+    if (!ngx_quic_pkt_in(c->buffer->pos[0])) {
+        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
+                       "quic expected initial, got handshake");
+        return NGX_ERROR;
     }
 
     if (pkt.dcid.len < NGX_QUIC_CID_LEN_MIN) {
