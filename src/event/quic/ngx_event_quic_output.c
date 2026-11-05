@@ -1532,7 +1532,7 @@ ngx_quiche_send_datagram(ngx_connection_t *pc, u_char *buf, size_t len,
 
         /*
          * Datagram rejected by the kernel is dropped. Quiche handles it as
-         * packet loss.
+         * packet loss and reports rejected PMTUD probes via failed_probe()
          */
 
         pc->write->error = 0;

@@ -81,6 +81,36 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.active_connection_id_limit),
       NULL },
 
+#if (NGX_QUICHE)
+    { ngx_string("quic_pmtud"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.pmtud),
+      NULL },
+
+    { ngx_string("quic_pmtud_pkts_between_probes"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.pmtud_pkts_between_probes),
+      NULL },
+
+    { ngx_string("quic_max_recv_udp_payload_size"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.max_recv_udp_payload_size),
+      NULL },
+
+    { ngx_string("quic_max_send_udp_payload_size"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.max_send_udp_payload_size),
+      NULL },
+#endif
+
       ngx_null_command
 };
 
@@ -219,6 +249,12 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
 
 #if (NGX_QUICHE)
     h3scf->quic.config = NGX_CONF_UNSET_PTR;
+
+    h3scf->quic.pmtud = NGX_CONF_UNSET;
+    h3scf->quic.pmtud_pkts_between_probes = NGX_CONF_UNSET_UINT;
+
+    h3scf->quic.max_recv_udp_payload_size = NGX_CONF_UNSET_SIZE;
+    h3scf->quic.max_send_udp_payload_size = NGX_CONF_UNSET_SIZE;
 #endif
 
     h3scf->quic.init = ngx_http_v3_init;
@@ -263,6 +299,19 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_uint_value(conf->quic.active_connection_id_limit,
                               prev->quic.active_connection_id_limit,
                               2);
+
+#if (NGX_QUICHE)
+    ngx_conf_merge_value(conf->quic.pmtud,
+                         prev->quic.pmtud, 0);
+    ngx_conf_merge_uint_value(conf->quic.pmtud_pkts_between_probes,
+                              prev->quic.pmtud_pkts_between_probes, 0);
+    ngx_conf_merge_size_value(conf->quic.max_recv_udp_payload_size,
+                              prev->quic.max_recv_udp_payload_size,
+                              NGX_QUIC_MAX_UDP_PAYLOAD_SIZE);
+    ngx_conf_merge_size_value(conf->quic.max_send_udp_payload_size,
+                              prev->quic.max_send_udp_payload_size,
+                              NGX_QUIC_MIN_INITIAL_SIZE);
+#endif
 
     if (conf->quic.host_key.len == 0) {
 
