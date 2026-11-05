@@ -2155,6 +2155,8 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
 
     quiche_config_set_initial_max_data(config, max_data);
 
+    quiche_config_discover_pmtu(config, qcf->discover_pmtu);
+
     quiche_config_set_initial_max_stream_data_uni(config,
                                                   qcf->stream_buffer_size);
     quiche_config_set_initial_max_stream_data_bidi_local(config,
@@ -2162,6 +2164,10 @@ ngx_quiche_config_new(ngx_quic_conf_t *qcf)
     quiche_config_set_initial_max_stream_data_bidi_remote(config,
                                                       qcf->stream_buffer_size);
 
+    quiche_config_set_max_recv_udp_payload_size(config,
+                                               qcf->max_recv_udp_payload_size);
+    quiche_config_set_max_send_udp_payload_size(config,
+                                               qcf->max_send_udp_payload_size);
     quiche_config_set_initial_max_streams_uni(config,
                                               qcf->max_concurrent_streams_uni);
     quiche_config_set_active_connection_id_limit(config,

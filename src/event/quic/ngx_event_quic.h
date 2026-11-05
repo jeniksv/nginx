@@ -115,6 +115,11 @@ typedef struct {
 
 #if (NGX_QUICHE)
     quiche_config                 *config;
+
+    ngx_flag_t                     discover_pmtu;
+
+    size_t                         max_recv_udp_payload_size;
+    size_t                         max_send_udp_payload_size;
 #endif
 } ngx_quic_conf_t;
 
