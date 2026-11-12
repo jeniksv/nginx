@@ -1447,6 +1447,10 @@ if [ $USE_OPENSSL_QUIC = YES ]; then
                      src/event/quic/ngx_event_quic_socket.c \
                      src/event/quic/ngx_event_quic_openssl_compat.c"
 
+    if [ $QUIC_QLOG = YES ]; then
+        have=NGX_QUIC_QLOG . auto/have
+    fi
+
     ngx_module_libs=
     ngx_module_link=YES
     ngx_module_order=

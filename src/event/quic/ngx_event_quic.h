@@ -107,6 +107,12 @@ typedef struct {
     ngx_int_t                      stream_reject_code_uni;
     ngx_int_t                      stream_reject_code_bidi;
 
+#if (NGX_QUIC_QLOG)
+    ngx_flag_t                     qlog_enabled;
+    ngx_str_t                      qlog_path;
+    ngx_uint_t                     qlog_sample_n;
+#endif
+
     ngx_quic_init_pt               init;
     ngx_quic_shutdown_pt           shutdown;
 
@@ -120,10 +126,6 @@ typedef struct {
 
     ngx_flag_t                     keylog_enabled;
     ngx_str_t                      keylog_path;
-
-    ngx_flag_t                     qlog_enabled;
-    ngx_str_t                      qlog_path;
-    ngx_uint_t                     qlog_sample_n;
 
     size_t                         max_recv_udp_payload_size;
     size_t                         max_send_udp_payload_size;

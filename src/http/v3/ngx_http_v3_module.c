@@ -21,11 +21,12 @@ static char *ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent,
     void *child);
 static char *ngx_http_quic_host_key(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
-#if (NGX_QUICHE)
+#if (NGX_QUIC_QLOG)
 static ngx_conf_num_bounds_t  ngx_http_v3_qlog_sample_bounds = {
     ngx_conf_check_num_bounds, 1, NGX_MAX_INT_T_VALUE
 };
-
+#endif
+#if (NGX_QUICHE)
 static ngx_conf_enum_t  ngx_http_v3_quic_congestion_control[] = {
     { ngx_string("reno"), QUICHE_CC_RENO },
     { ngx_string("cubic"), QUICHE_CC_CUBIC },
@@ -93,6 +94,29 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       offsetof(ngx_http_v3_srv_conf_t, quic.active_connection_id_limit),
       NULL },
 
+#if (NGX_QUIC_QLOG)
+    { ngx_string("quic_qlog"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_enabled),
+      NULL },
+
+    { ngx_string("quic_qlog_path"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_path),
+      NULL },
+
+    { ngx_string("quic_qlog_sample"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_sample_n),
+      &ngx_http_v3_qlog_sample_bounds },
+#endif
+
 #if (NGX_QUICHE)
     { ngx_string("quic_keylog"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
@@ -128,27 +152,6 @@ static ngx_command_t  ngx_http_v3_commands[] = {
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_v3_srv_conf_t, quic.max_send_udp_payload_size),
       NULL },
-
-    { ngx_string("quic_qlog"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_FLAG,
-      ngx_conf_set_flag_slot,
-      NGX_HTTP_SRV_CONF_OFFSET,
-      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_enabled),
-      NULL },
-
-    { ngx_string("quic_qlog_path"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_str_slot,
-      NGX_HTTP_SRV_CONF_OFFSET,
-      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_path),
-      NULL },
-
-    { ngx_string("quic_qlog_sample"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_num_slot,
-      NGX_HTTP_SRV_CONF_OFFSET,
-      offsetof(ngx_http_v3_srv_conf_t, quic.qlog_sample_n),
-      &ngx_http_v3_qlog_sample_bounds },
 
     { ngx_string("quic_congestion_control"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
@@ -301,6 +304,11 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
     h3scf->quic.stream_reject_code_bidi = NGX_HTTP_V3_ERR_REQUEST_REJECTED;
     h3scf->quic.active_connection_id_limit = NGX_CONF_UNSET_UINT;
 
+#if (NGX_QUIC_QLOG)
+    h3scf->quic.qlog_enabled = NGX_CONF_UNSET;
+    h3scf->quic.qlog_sample_n = NGX_CONF_UNSET_UINT;
+#endif
+
 #if (NGX_QUICHE)
     h3scf->quic.config = NGX_CONF_UNSET_PTR;
 
@@ -308,9 +316,6 @@ ngx_http_v3_create_srv_conf(ngx_conf_t *cf)
 
     h3scf->quic.max_recv_udp_payload_size = NGX_CONF_UNSET_SIZE;
     h3scf->quic.max_send_udp_payload_size = NGX_CONF_UNSET_SIZE;
-
-    h3scf->quic.qlog_enabled = NGX_CONF_UNSET;
-    h3scf->quic.qlog_sample_n = NGX_CONF_UNSET_UINT;
 
     h3scf->quic.keylog_enabled = NGX_CONF_UNSET;
 
@@ -361,15 +366,7 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
                               prev->quic.active_connection_id_limit,
                               2);
 
-#if (NGX_QUICHE)
-    ngx_conf_merge_value(conf->quic.discover_pmtu,
-                         prev->quic.discover_pmtu, 1);
-    ngx_conf_merge_size_value(conf->quic.max_recv_udp_payload_size,
-                              prev->quic.max_recv_udp_payload_size,
-                              NGX_QUIC_MAX_UDP_PAYLOAD_SIZE);
-    ngx_conf_merge_size_value(conf->quic.max_send_udp_payload_size,
-                              prev->quic.max_send_udp_payload_size,
-                              NGX_QUIC_MIN_INITIAL_SIZE);
+#if (NGX_QUIC_QLOG)
     ngx_conf_merge_value(conf->quic.qlog_enabled,
                          prev->quic.qlog_enabled, 0);
     ngx_conf_merge_str_value(conf->quic.qlog_path,
@@ -384,7 +381,17 @@ ngx_http_v3_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child)
             return NGX_CONF_ERROR;
         }
     }
+#endif
 
+#if (NGX_QUICHE)
+    ngx_conf_merge_value(conf->quic.discover_pmtu,
+                         prev->quic.discover_pmtu, 1);
+    ngx_conf_merge_size_value(conf->quic.max_recv_udp_payload_size,
+                              prev->quic.max_recv_udp_payload_size,
+                              NGX_QUIC_MAX_UDP_PAYLOAD_SIZE);
+    ngx_conf_merge_size_value(conf->quic.max_send_udp_payload_size,
+                              prev->quic.max_send_udp_payload_size,
+                              NGX_QUIC_MIN_INITIAL_SIZE);
     ngx_conf_merge_value(conf->quic.keylog_enabled,
                          prev->quic.keylog_enabled, 0);
     ngx_conf_merge_str_value(conf->quic.keylog_path,

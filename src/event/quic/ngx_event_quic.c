@@ -51,7 +51,9 @@ static void ngx_quiche_push_handler(ngx_event_t *wev);
 
 static void ngx_quiche_close_connection(ngx_connection_t *c, ngx_int_t rc);
 
+#if (NGX_QUIC_QLOG)
 static ngx_int_t ngx_quiche_qlog_init(ngx_quic_connection_t *qc);
+#endif
 static ngx_int_t ngx_quiche_keylog_init(ngx_quic_connection_t *qc);
 #endif
 
@@ -1662,6 +1664,8 @@ ngx_quic_address_hash(struct sockaddr *sockaddr, socklen_t socklen,
 
 #if (NGX_QUICHE)
 
+#if (NGX_QUIC_QLOG)
+
 static ngx_int_t
 ngx_quiche_qlog_init(ngx_quic_connection_t *qc)
 {
@@ -1706,6 +1710,8 @@ ngx_quiche_qlog_init(ngx_quic_connection_t *qc)
 
     return NGX_OK;
 }
+
+#endif
 
 
 static ngx_int_t
@@ -1770,10 +1776,12 @@ ngx_quiche_do_run(ngx_connection_t *c, ngx_quic_conf_t *conf)
                        "quiche keylog init failed, continuing without keylog");
     }
 
+#if (NGX_QUIC_QLOG)
     if (ngx_quiche_qlog_init(qc) == NGX_ERROR) {
         ngx_log_debug0(NGX_LOG_DEBUG_EVENT, c->log, 0,
                        "quiche qlog init failed, continuing without qlog");
     }
+#endif
 
     /*
      * With idle_timeout 0, native nginx fires the QUIC idle timer immediately

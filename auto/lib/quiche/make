@@ -1,6 +1,12 @@
 # Copyright (C) CDN77.com
 
-QUICHE_COMMON_FLAGS="--package quiche --verbose --features ffi,qlog"
+QUICHE_FEATURES="ffi"
+
+if [ $QUIC_QLOG = YES ]; then
+    QUICHE_FEATURES="$QUICHE_FEATURES,qlog"
+fi
+
+QUICHE_COMMON_FLAGS="--package quiche --verbose --features $QUICHE_FEATURES"
 QUICHE_BUILD_FLAGS="$QUICHE_COMMON_FLAGS --release"
 QUICHE_BUILD_TARGET="release"
 
