@@ -48,9 +48,9 @@ static ssize_t ngx_quiche_stream_recv(ngx_connection_t *c, u_char *buf,
     size_t size);
 static ngx_chain_t *ngx_quiche_stream_send_chain(ngx_connection_t *c,
     ngx_chain_t *in, off_t limit);
-static ngx_chain_t *ngx_quiche_uni_stream_send_chain(ngx_connection_t *c,
+static ngx_chain_t *ngx_quiche_stream_send_chain_buffered(ngx_connection_t *c,
     ngx_chain_t *in, off_t limit);
-static ngx_int_t ngx_quiche_flush_stream(ngx_quic_stream_t *qs);
+static ngx_int_t ngx_quiche_stream_flush(ngx_quic_stream_t *qs);
 static ngx_int_t ngx_quiche_shutdown_stream_send(ngx_connection_t *c);
 static ngx_int_t ngx_quiche_shutdown_stream_recv(ngx_connection_t *c);
 static ngx_int_t ngx_quiche_close_stream(ngx_quic_stream_t *qs);
@@ -1928,7 +1928,7 @@ ngx_quiche_stream_setup(ngx_quic_stream_t  *qs)
     if ((qs->id & NGX_QUIC_STREAM_UNIDIRECTIONAL)
         && (qs->id & NGX_QUIC_STREAM_SERVER_INITIATED))
     {
-        sc->send_chain = ngx_quiche_uni_stream_send_chain;
+        sc->send_chain = ngx_quiche_stream_send_chain_buffered;
 
     } else {
         sc->send_chain = ngx_quiche_stream_send_chain;
@@ -1968,7 +1968,7 @@ ngx_quiche_process_writable_streams(ngx_connection_t *c)
         if (qs != NULL && qs->connection != NULL) {
             wev = qs->connection->write;
 
-            if (ngx_quiche_flush_stream(qs) != NGX_OK) {
+            if (ngx_quiche_stream_flush(qs) != NGX_OK) {
                 return NGX_ERROR;
             }
 
@@ -2229,7 +2229,7 @@ ngx_quiche_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 
 
 static ngx_chain_t *
-ngx_quiche_uni_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in,
+ngx_quiche_stream_send_chain_buffered(ngx_connection_t *c, ngx_chain_t *in,
     off_t limit)
 {
     size_t                  size;
@@ -2247,7 +2247,7 @@ ngx_quiche_uni_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in,
         return NGX_CHAIN_ERROR;
     }
 
-    if (ngx_quiche_flush_stream(qs) != NGX_OK) {
+    if (ngx_quiche_stream_flush(qs) != NGX_OK) {
         return NGX_CHAIN_ERROR;
     }
 
@@ -2334,7 +2334,7 @@ ngx_quiche_uni_stream_send_chain(ngx_connection_t *c, ngx_chain_t *in,
 
 
 static ngx_int_t
-ngx_quiche_flush_stream(ngx_quic_stream_t *qs)
+ngx_quiche_stream_flush(ngx_quic_stream_t *qs)
 {
     size_t                  size;
     ssize_t                 sent;
